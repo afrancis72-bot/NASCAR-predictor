@@ -1,0 +1,47 @@
+# NASCAR Predictor V1
+
+A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:
+
+**Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer**
+
+## Current build
+V1A is a **pre-practice / pre-qualifying** model for the 2026 South Point 400 at Las Vegas.
+It uses the uploaded DraftKings field and salaries, current DK points baseline, 2026 1.5-mile evidence,
+Las Vegas spring evidence, selected season/venue priors, and a separate dominator model.
+
+Missing specialized statistics are shrunk to field-neutral rather than treated as zero.
+
+## Run
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Saturday update
+1. Open the **Live Update** tab.
+2. Download `practice_qualifying_template.csv`.
+3. Enter NASCAR practice ranks (single lap and 5/10/15/20-lap averages where available) and qualifying position.
+4. Upload the completed CSV.
+5. Re-run projections and DFS optimizer.
+
+The model weights longer-run practice more heavily than single-lap speed.
+
+## DraftKings scoring implemented
+- Place differential: +/- 1 point
+- Fastest laps: +0.45
+- Laps led: +0.25
+- Finishing-position points: current DraftKings NASCAR table
+
+## Important V1 limitation
+This is the architecture + first live test, not a fully trained historical model yet.
+Track DNA weights are transparent hand-set priors informed by current Las Vegas / 1.5-mile evidence.
+The next major step is to ingest historical race-level loop/practice/qualifying data and learn/calibrate
+track-archetype weights using walk-forward backtesting.
+
+## Files
+- `app.py` — Streamlit UI
+- `nascar_predictor_pro.py` — features, Monte Carlo, DK scoring, optimizer
+- `data/dk_salaries_las_vegas_2026.csv` — uploaded DK slate
+- `data/driver_priors_las_vegas_2026.csv` — V1A driver priors
+- `data/track_profiles.csv` — Track DNA
+- `data/practice_qualifying_template.csv` — Saturday update template
