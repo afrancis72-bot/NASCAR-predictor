@@ -46,6 +46,25 @@ def _rank_signal(df):
     den = sum(wts).replace(0,np.nan)
     return (num/den).fillna(0)
 
+
+def _safe_signal(s, higher_is_better=True, min_obs=6, cap=2.25):
+    x=pd.to_numeric(s,errors="coerce")
+    obs=x.notna()
+    n=int(obs.sum())
+    out=pd.Series(0.0,index=x.index,dtype=float)
+    if n < min_obs:
+        return out
+    vals=x[obs]
+    sd=float(vals.std(ddof=0))
+    if not np.isfinite(sd) or sd < 1e-9:
+        return out
+    z=(vals-float(vals.mean()))/sd
+    if not higher_is_better:
+        z=-z
+    reliability=min(1.0, n/max(min_obs*2,12))
+    out.loc[obs]=z.clip(-cap,cap)*reliability
+    return out
+
 def build_features(dk, priors, track, updates=None):
     df = dk.copy()
     df = df.merge(priors.drop(columns=["Salary","AvgPointsPerGame"],errors="ignore"), on="Name", how="left")
@@ -57,20 +76,20 @@ def build_features(dk, priors, track, updates=None):
 
     # Baselines. Missing specialized stats are shrunk to field-neutral, never treated as zero/bad.
     df["dk_base_z"] = _z(df["AvgPointsPerGame"], True)
-    df["intermediate_z"] = _z(df["intermediate_2026_avg_finish"], False)
-    df["vegas_spring_z"] = _z(df["vegas_spring_2026_finish"], False)
-    df["vegas_hist_z"] = _z(df["vegas_nextgen_avg_finish"], False)
-    df["season_finish_z"] = _z(df["season_2026_avg_finish"], False)
-    df["season_led_z"] = _z(df["season_2026_laps_led"], True)
-    df["intermediate_led_z"] = _z(df["intermediate_2026_laps_led"], True)
-    df["vegas_led_z"] = _z(df.get("vegas_nextgen_laps_led", pd.Series(np.nan,index=df.index)), True)
-    df["vegas_spring_led_z"] = _z(df.get("vegas_spring_2026_laps_led", pd.Series(np.nan,index=df.index)), True)
-    df["nextgen_1p5_led_z"] = _z(df.get("nextgen_1p5_laps_led", pd.Series(np.nan,index=df.index)), True)
-    df["season_speed_z"] = _z(df.get("season_speed_rank", pd.Series(np.nan,index=df.index)), False)
-    df["chase_rating_z"] = _z(df.get("chase_driver_rating", pd.Series(np.nan,index=df.index)), True)
-    df["chase_finish_z"] = _z(df.get("chase_avg_finish", pd.Series(np.nan,index=df.index)), False)
-    df["vegas_career_finish_z"] = _z(df.get("vegas_career_avg_finish", pd.Series(np.nan,index=df.index)), False)
-    df["vegas_career_led_z"] = _z(df.get("vegas_career_laps_led", pd.Series(np.nan,index=df.index)), True)
+    df["intermediate_z"] = _safe_signal(df.get("intermediate_2026_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["vegas_spring_z"] = _safe_signal(df.get("vegas_spring_2026_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["vegas_hist_z"] = _safe_signal(df.get("vegas_nextgen_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["season_finish_z"] = _safe_signal(df.get("season_2026_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["season_led_z"] = _safe_signal(df.get("season_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["intermediate_led_z"] = _safe_signal(df.get("intermediate_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["vegas_led_z"] = _safe_signal(df.get("vegas_nextgen_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["vegas_spring_led_z"] = _safe_signal(df.get("vegas_spring_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["nextgen_1p5_led_z"] = _safe_signal(df.get("nextgen_1p5_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["season_speed_z"] = _safe_signal(df.get("season_speed_rank", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["chase_rating_z"] = _safe_signal(df.get("chase_driver_rating", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["chase_finish_z"] = _safe_signal(df.get("chase_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["vegas_career_finish_z"] = _safe_signal(df.get("vegas_career_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
+    df["vegas_career_led_z"] = _safe_signal(df.get("vegas_career_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
     df["manual_speed_z"] = _z(df["manual_speed_rating"], True)
     df["practice_z"] = _rank_signal(df)
 
@@ -82,11 +101,11 @@ def build_features(dk, priors, track, updates=None):
              0.15*df["vegas_led_z"].clip(-2,2) +
              0.15*df["vegas_career_finish_z"].clip(-2,2) +
              0.10*df["vegas_career_led_z"].clip(-2,2))
-    current = (0.65*df["dk_base_z"] +
-               0.10*df["season_finish_z"].clip(-2,2) +
-               0.10*df["season_speed_z"].clip(-2,2) +
-               0.10*df["chase_rating_z"].clip(-2,2) +
-               0.05*df["chase_finish_z"].clip(-2,2))
+    current = (0.30*df["dk_base_z"].clip(-2,2) +
+               0.30*df["season_finish_z"].clip(-2,2) +
+               0.15*df["season_speed_z"].clip(-2,2) +
+               0.15*df["chase_rating_z"].clip(-2,2) +
+               0.10*df["chase_finish_z"].clip(-2,2))
     intermediate = (0.55*df["intermediate_z"].clip(-2,2) +
                     0.15*df["intermediate_led_z"].clip(-2,2) +
                     0.30*df["nextgen_1p5_led_z"].clip(-2,2))
@@ -130,6 +149,10 @@ def build_features(dk, priors, track, updates=None):
         "season_speed_rank","chase_driver_rating","vegas_career_avg_finish"]
     df["data_coverage"] = df[evidence_cols].notna().sum(axis=1) + practice_available.astype(int)*2 + qual_available.astype(int)
     df["model_confidence"] = (0.45 + 0.055*df["data_coverage"]).clip(upper=0.95)
+    df["audit_dk_prior"] = df["dk_base_z"].clip(-2,2)
+    df["audit_vegas"] = vegas
+    df["audit_current"] = current
+    df["audit_intermediate"] = intermediate
     return df
 
 def simulate(features, config=Config()):
@@ -168,7 +191,7 @@ def simulate(features, config=Config()):
 
     out = features[["Name","ID","Salary","AvgPointsPerGame","race_strength","dominator_strength",
                     "data_coverage","model_confidence","projected_start","place_diff_room",
-                    "front_start_score","back_start_score"]].copy()
+                    "front_start_score","back_start_score","audit_dk_prior","audit_vegas","audit_current","audit_intermediate"]].copy()
     out["proj_dk"] = dkpts.mean(axis=0)
     out["floor_p20"] = np.quantile(dkpts,0.20,axis=0)
     out["ceiling_p90"] = np.quantile(dkpts,0.90,axis=0)

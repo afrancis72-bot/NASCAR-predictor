@@ -1,4 +1,4 @@
-# NASCAR Predictor V1.3
+# NASCAR Predictor V1.4
 
 A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:
 
@@ -64,3 +64,10 @@ Larson-dominant, split-dominator, chaos/attrition, and track-position scripts. T
 are learned from simulation frequency. Candidate lineups are scored across those scripts and
 selected for marginal scenario coverage subject to the user's overlap setting. No driver is
 forced into the portfolio and no manual exposure cap is used.
+
+## V1.4 calibration fix
+- Sparse optional statistics require at least six real observations before influencing a driver.
+- Missing sparse evidence is neutral rather than median-imputed into tiny samples.
+- Sparse z-scores are clipped and reliability-shrunk.
+- DraftKings fantasy baseline is now a weak prior rather than a dominant/double-counted signal.
+- Diagnostics exposes DK prior, Vegas, current-form, and intermediate components for auditing.
