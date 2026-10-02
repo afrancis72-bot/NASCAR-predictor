@@ -2,12 +2,12 @@
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups, optimize_race_sim_lineups, portfolio_exposure
+from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups, optimize_race_sim_lineups, portfolio_exposure, optimize_scenario_portfolio, scenario_summary
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.2", layout="wide")
-st.title("🏁 NASCAR Predictor V1.2")
+st.set_page_config(page_title="NASCAR Predictor V1.3", layout="wide")
+st.title("🏁 NASCAR Predictor V1.3")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -72,12 +72,12 @@ with tab2:
 with tab3:
     st.subheader("DraftKings lineup optimizer")
     if objective == "ceiling":
-        st.caption("V1.2 Race-Sim GPP mode: lineup P90/P95 come from coherent simulated races; starting position activates place differential and front-row dominator effects.")
+        st.caption("V1.3 Scenario GPP mode: lineups are evaluated across coherent race scripts; script weights come from the Monte Carlo rather than manual exposure rules.")
     if objective == "ceiling":
-        lineups=optimize_race_sim_lineups(
+        lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
-            roster_size=6,max_overlap=int(max_overlap),candidate_pool=1200,
-            seed=int(seed),risk_mode="gpp")
+            roster_size=6,max_overlap=int(max_overlap),candidate_pool=1800,
+            seed=int(seed))
     else:
         lineups=optimize_lineups(
             proj,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
@@ -96,14 +96,18 @@ with tab5:
 with tab6:
     st.subheader("Model diagnostics")
     st.write("Use this page to challenge the model before trusting the optimizer.")
+    st.markdown("#### Simulated race-script mix")
+    ss=scenario_summary(proj,sim_matrix)
+    ss["Simulation probability"]=(ss["Simulation probability"]*100).round(1).astype(str)+"%"
+    st.dataframe(ss,use_container_width=True,hide_index=True)
     dcols=["Name","Salary","race_strength","dominator_strength","data_coverage",
            "model_confidence","projected_start","proj_dk","ceiling_p90"]
     st.dataframe(proj[dcols],use_container_width=True)
     try:
-        diag_lineups=optimize_race_sim_lineups(
+        diag_lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
-            roster_size=6,max_overlap=int(max_overlap),candidate_pool=700,
-            seed=int(seed),risk_mode="gpp")
+            roster_size=6,max_overlap=int(max_overlap),candidate_pool=1400,
+            seed=int(seed))
         expo=portfolio_exposure(diag_lineups,proj)
         st.markdown("#### Current optimizer exposure")
         st.dataframe(expo,use_container_width=True)

@@ -297,3 +297,136 @@ def portfolio_exposure(lineups, proj):
     out["Exposure"]=out["Lineups"]/n
     return out.merge(proj[["Name","Salary","proj_dk","ceiling_p90","model_confidence"]],
                      on="Name",how="left").sort_values(["Exposure","proj_dk"],ascending=[False,False])
+
+
+def classify_race_scripts(features, sim_matrix):
+    """Classify each coherent simulated race into a DFS-relevant race script."""
+    names=features["Name"].tolist()
+    dom=features["dominator_strength"].to_numpy(float)
+    elite_idx=np.argsort(dom)[::-1][:4]
+    ham_idx=names.index("Denny Hamlin") if "Denny Hamlin" in names else None
+    lar_idx=names.index("Kyle Larson") if "Kyle Larson" in names else None
+
+    # A high-scoring driver is a practical proxy for dominator/PD concentration
+    # because sim_matrix already includes finishing, PD, laps led and fastest laps.
+    order=np.argsort(sim_matrix,axis=1)[:,::-1]
+    top1=sim_matrix[np.arange(len(sim_matrix)),order[:,0]]
+    top2=sim_matrix[np.arange(len(sim_matrix)),order[:,1]]
+    top3=sim_matrix[np.arange(len(sim_matrix)),order[:,2]]
+    spread=top1-top3
+
+    labels=np.full(len(sim_matrix),"split_dominator",dtype=object)
+    # Chaos: unusually compressed top scores / multiple value paths.
+    labels[spread < np.quantile(spread,.22)]="chaos_attrition"
+    # Track-position / concentrated domination.
+    labels[spread > np.quantile(spread,.78)]="track_position"
+
+    if ham_idx is not None:
+        ham=sim_matrix[:,ham_idx]
+        labels[(ham >= np.quantile(ham,.82)) & (ham >= top2)]="hamlin_dominant"
+    if lar_idx is not None:
+        lar=sim_matrix[:,lar_idx]
+        labels[(lar >= np.quantile(lar,.82)) & (lar >= top2)]="larson_dominant"
+    return labels
+
+def _candidate_lineup_matrix(lineups, features):
+    name_to_idx={n:i for i,n in enumerate(features["Name"])}
+    mats=[]
+    valid=[]
+    for ridx,row in lineups.iterrows():
+        ns=[x.strip() for x in str(row["Drivers"]).split("|")]
+        if len(ns)==6 and all(n in name_to_idx for n in ns):
+            mats.append([name_to_idx[n] for n in ns])
+            valid.append(ridx)
+    return np.asarray(mats,dtype=int), valid
+
+def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=50000,
+                                roster_size=6, max_overlap=4, candidate_pool=1800, seed=42):
+    """
+    V1.3: build many legal candidates, score them inside coherent races, then
+    reward portfolios that cover empirically occurring race scripts. No driver
+    is forced in/out and there are no manual exposure caps.
+    """
+    base=optimize_race_sim_lineups(features,sim_matrix,n_lineups=max(250,min(candidate_pool,900)),
+                                  salary_cap=salary_cap,roster_size=roster_size,
+                                  max_overlap=roster_size,candidate_pool=candidate_pool,
+                                  seed=seed,risk_mode="gpp")
+    idxs, valid=_candidate_lineup_matrix(base,features)
+    if len(valid)==0: return base.head(n_lineups)
+
+    labels=classify_race_scripts(features,sim_matrix)
+    scripts=["hamlin_dominant","larson_dominant","split_dominator","chaos_attrition","track_position"]
+    probs={s:float(np.mean(labels==s)) for s in scripts}
+
+    # Candidate score distribution from the SAME simulated races.
+    scores=np.stack([sim_matrix[:,ix].sum(axis=1) for ix in idxs],axis=1)
+    mean=scores.mean(0)
+    p90=np.quantile(scores,.90,axis=0)
+    p95=np.quantile(scores,.95,axis=0)
+
+    script_scores={}
+    for s in scripts:
+        mask=labels==s
+        if mask.sum() >= 20:
+            script_scores[s]=np.quantile(scores[mask],.90,axis=0)
+        else:
+            script_scores[s]=p90.copy()
+
+    # Normalize within candidate pool so a rare script matters in proportion
+    # to how often the simulator actually produces it.
+    def z(a):
+        sd=np.std(a)
+        return (a-np.mean(a))/(sd if sd>1e-9 else 1)
+    scenario_component=np.zeros(len(valid))
+    for s in scripts:
+        scenario_component += probs[s]*z(script_scores[s])
+
+    overall=0.30*z(mean)+0.25*z(p90)+0.20*z(p95)+0.25*scenario_component
+
+    # Greedy diversified portfolio. Overlap rule remains user-controlled.
+    chosen=[]
+    chosen_sets=[]
+    remaining=list(np.argsort(overall)[::-1])
+    while remaining and len(chosen)<n_lineups:
+        best=None; best_adj=-1e99
+        for j in remaining[:500]:
+            sset=set(idxs[j].tolist())
+            if any(len(sset & old)>max_overlap for old in chosen_sets):
+                continue
+            # Marginal script coverage bonus: reward a lineup that is strong
+            # where already-selected lineups are weaker.
+            bonus=0.0
+            if chosen:
+                for s in scripts:
+                    prior=max(script_scores[s][k] for k in chosen)
+                    bonus += probs[s]*max(0.0,script_scores[s][j]-prior)
+                bonus*=0.015
+            adj=overall[j]+bonus
+            if adj>best_adj:
+                best_adj=adj; best=j
+        if best is None: break
+        chosen.append(best); chosen_sets.append(set(idxs[best].tolist()))
+        remaining.remove(best)
+
+    rows=[]
+    for rank,j in enumerate(chosen,1):
+        r=base.iloc[valid[j]].copy()
+        r["Lineup"]=rank
+        r["Mean"]=round(float(mean[j]),2)
+        r["P90"]=round(float(p90[j]),2)
+        r["P95"]=round(float(p95[j]),2)
+        r["ScenarioScore"]=round(float(scenario_component[j]),3)
+        for s in scripts:
+            r[s+"_P90"]=round(float(script_scores[s][j]),2)
+        rows.append(r)
+    out=pd.DataFrame(rows)
+    out.attrs["script_probabilities"]=probs
+    return out
+
+def scenario_summary(features, sim_matrix):
+    labels=classify_race_scripts(features,sim_matrix)
+    order=["hamlin_dominant","larson_dominant","split_dominator","chaos_attrition","track_position"]
+    return pd.DataFrame({
+        "Race script":order,
+        "Simulation probability":[float(np.mean(labels==s)) for s in order]
+    })

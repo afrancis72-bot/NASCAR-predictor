@@ -1,4 +1,4 @@
-# NASCAR Predictor V1.2
+# NASCAR Predictor V1.3
 
 A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:
 
@@ -57,3 +57,10 @@ Ceiling optimization now evaluates six-driver rosters within the same Monte Carl
 - Starting-grid architecture: qualifying position drives place-differential room and a modest front-start dominator effect.
 - Diagnostics tab with model confidence and optimizer exposure.
 - Saturday update remains one CSV upload; do not confuse qualifying order with official starting position.
+
+## V1.3 scenario-aware portfolio
+The ceiling/GPP optimizer now classifies coherent Monte Carlo races into Hamlin-dominant,
+Larson-dominant, split-dominator, chaos/attrition, and track-position scripts. Their weights
+are learned from simulation frequency. Candidate lineups are scored across those scripts and
+selected for marginal scenario coverage subject to the user's overlap setting. No driver is
+forced into the portfolio and no manual exposure cap is used.
