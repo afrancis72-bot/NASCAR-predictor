@@ -2,12 +2,12 @@
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups
+from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups, optimize_race_sim_lineups
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1", layout="wide")
-st.title("🏁 NASCAR Predictor V1")
+st.set_page_config(page_title="NASCAR Predictor V1.1", layout="wide")
+st.title("🏁 NASCAR Predictor V1.1")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -70,8 +70,17 @@ with tab2:
 
 with tab3:
     st.subheader("DraftKings lineup optimizer")
-    lineups=optimize_lineups(proj,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
-                             roster_size=6,max_overlap=int(max_overlap),objective=objective)
+    if objective == "ceiling":
+        st.caption("V1.1 Race-Sim GPP mode: P90/P95 are calculated from complete simulated race outcomes for the six-driver lineup.")
+    if objective == "ceiling":
+        lineups=optimize_race_sim_lineups(
+            proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
+            roster_size=6,max_overlap=int(max_overlap),candidate_pool=1200,
+            seed=int(seed),risk_mode="gpp")
+    else:
+        lineups=optimize_lineups(
+            proj,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
+            roster_size=6,max_overlap=int(max_overlap),objective=objective)
     st.dataframe(lineups,use_container_width=True)
     st.download_button("Download lineups",lineups.to_csv(index=False).encode(),
                        file_name="nascar_v1_lineups.csv")

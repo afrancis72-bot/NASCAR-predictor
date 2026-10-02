@@ -64,6 +64,7 @@ def build_features(dk, priors, track, updates=None):
     df["season_led_z"] = _z(df["season_2026_laps_led"], True)
     df["intermediate_led_z"] = _z(df["intermediate_2026_laps_led"], True)
     df["vegas_led_z"] = _z(df.get("vegas_nextgen_laps_led", pd.Series(np.nan,index=df.index)), True)
+    df["vegas_spring_led_z"] = _z(df.get("vegas_spring_2026_laps_led", pd.Series(np.nan,index=df.index)), True)
     df["manual_speed_z"] = _z(df["manual_speed_rating"], True)
     df["practice_z"] = _rank_signal(df)
 
@@ -99,7 +100,7 @@ def build_features(dk, priors, track, updates=None):
     df["dominator_strength"] = (
         w.dominator_weight_speed*(0.65*current+0.35*df["practice_z"]) +
         w.dominator_weight_intermediate*(0.55*intermediate+0.45*df["intermediate_led_z"]) +
-        w.dominator_weight_vegas*(0.35*vegas+0.35*df["season_led_z"]+0.30*df["vegas_led_z"]) +
+        w.dominator_weight_vegas*(0.25*vegas+0.25*df["season_led_z"]+0.25*df["vegas_led_z"]+0.25*df["vegas_spring_led_z"]) +
         w.dominator_weight_start*start_front
     )
     df["data_coverage"] = (
@@ -187,3 +188,73 @@ def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_ov
             "IDs":" | ".join(sub["ID"].astype(str))
         })
     return pd.DataFrame(rows)
+
+
+def optimize_race_sim_lineups(proj, sim_matrix, n_lineups=10, salary_cap=50000,
+                              roster_size=6, max_overlap=4, candidate_pool=2500,
+                              seed=42, risk_mode="gpp"):
+    """
+    V1.1 optimizer. Generates legal candidate rosters, then evaluates each roster by
+    summing its six drivers inside EACH SAME simulated race. This preserves NASCAR
+    race-level correlation and makes P90/P95 true lineup outcomes rather than sums
+    of individual percentiles.
+    """
+    from scipy.optimize import milp, LinearConstraint, Bounds
+    rng=np.random.default_rng(seed)
+    n=len(proj)
+    salary=proj["Salary"].to_numpy(float)
+    # Candidate generation: perturb mean projection to create diverse, strong legal rosters.
+    base=proj["proj_dk"].to_numpy(float)
+    candidates=set()
+    attempts=max(candidate_pool*3,3000)
+    for _ in range(attempts):
+        noise=rng.normal(0,7.5,n)
+        score=base+noise
+        cons=[
+            LinearConstraint(np.ones((1,n)),[roster_size],[roster_size]),
+            LinearConstraint(salary.reshape(1,-1),[-np.inf],[salary_cap])
+        ]
+        res=milp(c=-score,integrality=np.ones(n),
+                 bounds=Bounds(np.zeros(n),np.ones(n)),constraints=cons)
+        if res.success:
+            idx=tuple(np.where(res.x>0.5)[0].tolist())
+            candidates.add(idx)
+        if len(candidates)>=candidate_pool: break
+
+    # Always include mean-optimal lineup.
+    cons=[LinearConstraint(np.ones((1,n)),[roster_size],[roster_size]),
+          LinearConstraint(salary.reshape(1,-1),[-np.inf],[salary_cap])]
+    res=milp(c=-base,integrality=np.ones(n),bounds=Bounds(np.zeros(n),np.ones(n)),constraints=cons)
+    if res.success:candidates.add(tuple(np.where(res.x>0.5)[0].tolist()))
+
+    rows=[]
+    for idx in candidates:
+        scores=sim_matrix[:,idx].sum(axis=1)
+        mean=float(scores.mean()); p10=float(np.quantile(scores,.10))
+        p90=float(np.quantile(scores,.90)); p95=float(np.quantile(scores,.95))
+        # GPP objective rewards coherent upper-tail outcomes without ignoring mean.
+        gpp=0.40*mean+0.25*p90+0.35*p95
+        cash=0.65*mean+0.35*p10
+        rows.append((idx,mean,p10,p90,p95,gpp,cash))
+    rows.sort(key=lambda x:x[5] if risk_mode=="gpp" else x[6],reverse=True)
+
+    selected=[]
+    for r in rows:
+        idx=r[0]
+        if all(len(set(idx)&set(s[0]))<=max_overlap for s in selected):
+            selected.append(r)
+            if len(selected)>=n_lineups: break
+
+    out=[]
+    for k,(idx,mean,p10,p90,p95,gpp,cash) in enumerate(selected,1):
+        sub=proj.iloc[list(idx)]
+        out.append({
+            "Lineup":k,
+            "Drivers":" | ".join(sub["Name"]),
+            "Salary":int(sub["Salary"].sum()),
+            "Mean":round(mean,2),"P10":round(p10,2),
+            "P90":round(p90,2),"P95":round(p95,2),
+            "GPP_Score":round(gpp,2),
+            "IDs":" | ".join(sub["ID"].astype(str))
+        })
+    return pd.DataFrame(out)

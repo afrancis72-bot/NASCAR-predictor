@@ -1,4 +1,4 @@
-# NASCAR Predictor V1
+# NASCAR Predictor V1.1
 
 A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:
 
@@ -45,3 +45,7 @@ track-archetype weights using walk-forward backtesting.
 - `data/driver_priors_las_vegas_2026.csv` — V1A driver priors
 - `data/track_profiles.csv` — Track DNA
 - `data/practice_qualifying_template.csv` — Saturday update template
+
+
+## V1.1 upgrade
+Ceiling optimization now evaluates six-driver rosters within the same Monte Carlo race outcomes. Added complete 2026 spring Las Vegas finishing/start/laps-led evidence for the current DK field where available.
