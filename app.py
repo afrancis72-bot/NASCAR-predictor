@@ -2,12 +2,12 @@
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups, optimize_race_sim_lineups
+from nascar_predictor_pro import Config, build_features, simulate, optimize_lineups, optimize_race_sim_lineups, portfolio_exposure
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.1", layout="wide")
-st.title("🏁 NASCAR Predictor V1.1")
+st.set_page_config(page_title="NASCAR Predictor V1.2", layout="wide")
+st.title("🏁 NASCAR Predictor V1.2")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -26,11 +26,12 @@ with st.sidebar:
 dk_default=pd.read_csv(DATA/"dk_salaries_las_vegas_2026.csv")
 pri_default=pd.read_csv(DATA/"driver_priors_las_vegas_2026.csv")
 
-tab1,tab2,tab3,tab4,tab5=st.tabs(["Race Predictor","Driver Explorer","DFS Optimizer","Live Update","Track DNA"])
+tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["Race Predictor","Driver Explorer","DFS Optimizer","Live Update","Track DNA","Diagnostics"])
 
 with tab4:
     st.subheader("Saturday practice / qualifying update")
-    st.write("Upload a CSV with Name plus any of: single_lap_rank, avg5_rank, avg10_rank, avg15_rank, avg20_rank, qualifying_position.")
+    st.write("Upload the Saturday update CSV. `qualifying_position` is the official starting grid. Practice ranks can include single-lap plus 5/10/15/20-lap averages. Longer-run ranks receive the most weight.")
+    st.warning("Do not enter the qualifying ORDER published before Saturday. Enter qualifying_position only after the official starting lineup is set.")
     st.download_button("Download update template",(DATA/"practice_qualifying_template.csv").read_bytes(),
                        file_name="practice_qualifying_template.csv")
     live=st.file_uploader("Practice / qualifying CSV",type="csv")
@@ -71,7 +72,7 @@ with tab2:
 with tab3:
     st.subheader("DraftKings lineup optimizer")
     if objective == "ceiling":
-        st.caption("V1.1 Race-Sim GPP mode: P90/P95 are calculated from complete simulated race outcomes for the six-driver lineup.")
+        st.caption("V1.2 Race-Sim GPP mode: lineup P90/P95 come from coherent simulated races; starting position activates place differential and front-row dominator effects.")
     if objective == "ceiling":
         lineups=optimize_race_sim_lineups(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
@@ -90,3 +91,21 @@ with tab5:
     edited=st.data_editor(track,use_container_width=True,num_rows="fixed")
     st.caption("V1 exposes the DNA weights deliberately. Later versions can learn these from walk-forward backtests by track archetype.")
     st.write("**Current design:** live practice and qualifying weights only activate when those fields exist; otherwise their weight is redistributed to stable priors.")
+
+
+with tab6:
+    st.subheader("Model diagnostics")
+    st.write("Use this page to challenge the model before trusting the optimizer.")
+    dcols=["Name","Salary","race_strength","dominator_strength","data_coverage",
+           "model_confidence","projected_start","proj_dk","ceiling_p90"]
+    st.dataframe(proj[dcols],use_container_width=True)
+    try:
+        diag_lineups=optimize_race_sim_lineups(
+            proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
+            roster_size=6,max_overlap=int(max_overlap),candidate_pool=700,
+            seed=int(seed),risk_mode="gpp")
+        expo=portfolio_exposure(diag_lineups,proj)
+        st.markdown("#### Current optimizer exposure")
+        st.dataframe(expo,use_container_width=True)
+    except Exception as e:
+        st.info(f"Exposure diagnostic unavailable: {e}")
