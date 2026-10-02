@@ -65,15 +65,31 @@ def build_features(dk, priors, track, updates=None):
     df["intermediate_led_z"] = _z(df["intermediate_2026_laps_led"], True)
     df["vegas_led_z"] = _z(df.get("vegas_nextgen_laps_led", pd.Series(np.nan,index=df.index)), True)
     df["vegas_spring_led_z"] = _z(df.get("vegas_spring_2026_laps_led", pd.Series(np.nan,index=df.index)), True)
+    df["nextgen_1p5_led_z"] = _z(df.get("nextgen_1p5_laps_led", pd.Series(np.nan,index=df.index)), True)
+    df["season_speed_z"] = _z(df.get("season_speed_rank", pd.Series(np.nan,index=df.index)), False)
+    df["chase_rating_z"] = _z(df.get("chase_driver_rating", pd.Series(np.nan,index=df.index)), True)
+    df["chase_finish_z"] = _z(df.get("chase_avg_finish", pd.Series(np.nan,index=df.index)), False)
+    df["vegas_career_finish_z"] = _z(df.get("vegas_career_avg_finish", pd.Series(np.nan,index=df.index)), False)
+    df["vegas_career_led_z"] = _z(df.get("vegas_career_laps_led", pd.Series(np.nan,index=df.index)), True)
     df["manual_speed_z"] = _z(df["manual_speed_rating"], True)
     df["practice_z"] = _rank_signal(df)
 
     # Blend venue history only where evidence exists; neutral shrinkage elsewhere.
-    # Reliability shrinkage: specialized fields are powerful but incomplete in V1A.
-    # DK baseline is the broad field prior; sparse official stats adjust it rather than replace it.
-    vegas = 0.45*df["vegas_spring_z"].clip(-2,2) + 0.20*df["vegas_hist_z"].clip(-2,2) + 0.35*df["vegas_led_z"].clip(-2,2)
-    current = 0.82*df["dk_base_z"] + 0.10*df["season_finish_z"].clip(-2,2) + 0.08*df["manual_speed_z"].clip(-2,2)
-    intermediate = 0.78*df["intermediate_z"].clip(-2,2) + 0.22*df["intermediate_led_z"].clip(-2,2)
+    # V1.2 reliability-aware layers. Sparse evidence adjusts the broad DK prior,
+    # but no driver is rewarded simply because more columns happen to be populated.
+    vegas = (0.45*df["vegas_spring_z"].clip(-2,2) +
+             0.15*df["vegas_hist_z"].clip(-2,2) +
+             0.15*df["vegas_led_z"].clip(-2,2) +
+             0.15*df["vegas_career_finish_z"].clip(-2,2) +
+             0.10*df["vegas_career_led_z"].clip(-2,2))
+    current = (0.65*df["dk_base_z"] +
+               0.10*df["season_finish_z"].clip(-2,2) +
+               0.10*df["season_speed_z"].clip(-2,2) +
+               0.10*df["chase_rating_z"].clip(-2,2) +
+               0.05*df["chase_finish_z"].clip(-2,2))
+    intermediate = (0.55*df["intermediate_z"].clip(-2,2) +
+                    0.15*df["intermediate_led_z"].clip(-2,2) +
+                    0.30*df["nextgen_1p5_led_z"].clip(-2,2))
 
     # Pre-qualifying baseline; practice signal only becomes material when populated.
     practice_available = df[["single_lap_rank","avg5_rank","avg10_rank","avg15_rank","avg20_rank"]].notna().any(axis=1)
@@ -99,15 +115,21 @@ def build_features(dk, priors, track, updates=None):
     start_front = _z(df["projected_start"], False)
     df["dominator_strength"] = (
         w.dominator_weight_speed*(0.65*current+0.35*df["practice_z"]) +
-        w.dominator_weight_intermediate*(0.55*intermediate+0.45*df["intermediate_led_z"]) +
+        w.dominator_weight_intermediate*(0.40*intermediate+0.25*df["intermediate_led_z"]+0.35*df["nextgen_1p5_led_z"]) +
         w.dominator_weight_vegas*(0.25*vegas+0.25*df["season_led_z"]+0.25*df["vegas_led_z"]+0.25*df["vegas_spring_led_z"]) +
         w.dominator_weight_start*start_front
     )
-    df["data_coverage"] = (
-        df[["intermediate_2026_avg_finish","vegas_spring_2026_finish",
-            "season_2026_avg_finish","season_2026_laps_led"]].notna().sum(axis=1)
-        + practice_available.astype(int)*2 + qual_available.astype(int)
-    )
+    df["place_diff_room"] = df["projected_start"] - 1
+    df["front_start_score"] = ((10 - df["projected_start"]).clip(lower=0) / 9.0)
+    df["back_start_score"] = ((df["projected_start"] - 20).clip(lower=0) / max(len(df)-20,1))
+    # Starting up front modestly increases early dominator access; it does NOT redefine driver ability.
+    if qual_available.any():
+        df["dominator_strength"] += 0.22*_z(df["projected_start"], False)
+    evidence_cols=["intermediate_2026_avg_finish","vegas_spring_2026_finish",
+        "season_2026_avg_finish","season_2026_laps_led","nextgen_1p5_laps_led",
+        "season_speed_rank","chase_driver_rating","vegas_career_avg_finish"]
+    df["data_coverage"] = df[evidence_cols].notna().sum(axis=1) + practice_available.astype(int)*2 + qual_available.astype(int)
+    df["model_confidence"] = (0.45 + 0.055*df["data_coverage"]).clip(upper=0.95)
     return df
 
 def simulate(features, config=Config()):
@@ -125,7 +147,8 @@ def simulate(features, config=Config()):
 
     # Simulation: latent performance + incident tail. V1 intentionally transparent.
     for s in range(sims):
-        latent = strength + rng.normal(0, 1.55, n)
+        sigma = 1.85 - 0.65*features["model_confidence"].to_numpy(float)
+        latent = strength + rng.normal(0, sigma, n)
         incidents = rng.random(n) < dnf
         latent[incidents] -= rng.uniform(2.5,5.5,incidents.sum())
         order = np.argsort(-latent)
@@ -143,7 +166,9 @@ def simulate(features, config=Config()):
         pdiff = starts - f
         dkpts[s] = fp + pdiff + 0.25*ll + 0.45*flp
 
-    out = features[["Name","ID","Salary","AvgPointsPerGame","race_strength","dominator_strength","data_coverage","projected_start"]].copy()
+    out = features[["Name","ID","Salary","AvgPointsPerGame","race_strength","dominator_strength",
+                    "data_coverage","model_confidence","projected_start","place_diff_room",
+                    "front_start_score","back_start_score"]].copy()
     out["proj_dk"] = dkpts.mean(axis=0)
     out["floor_p20"] = np.quantile(dkpts,0.20,axis=0)
     out["ceiling_p90"] = np.quantile(dkpts,0.90,axis=0)
@@ -258,3 +283,17 @@ def optimize_race_sim_lineups(proj, sim_matrix, n_lineups=10, salary_cap=50000,
             "IDs":" | ".join(sub["ID"].astype(str))
         })
     return pd.DataFrame(out)
+
+
+def portfolio_exposure(lineups, proj):
+    if lineups is None or len(lineups)==0:
+        return pd.DataFrame()
+    counts={}
+    for s in lineups["Drivers"]:
+        for name in [x.strip() for x in str(s).split("|")]:
+            counts[name]=counts.get(name,0)+1
+    n=len(lineups)
+    out=pd.DataFrame({"Name":list(counts.keys()),"Lineups":list(counts.values())})
+    out["Exposure"]=out["Lineups"]/n
+    return out.merge(proj[["Name","Salary","proj_dk","ceiling_p90","model_confidence"]],
+                     on="Name",how="left").sort_values(["Exposure","proj_dk"],ascending=[False,False])

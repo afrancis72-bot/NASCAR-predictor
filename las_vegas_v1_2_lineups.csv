@@ -1,0 +1,11 @@
+Lineup,Drivers,Salary,Mean,P10,P90,P95,GPP_Score,IDs
+1,Denny Hamlin | Ryan Blaney | William Byron | Brad Keselowski | Daniel Suarez | John H. Nemechek,49500,245.4,173.79,314.95,331.65,292.98,44343073 | 44343076 | 44343079 | 44343088 | 44343091 | 44343101
+2,Denny Hamlin | Ryan Blaney | William Byron | Daniel Suarez | Chris Buescher | Todd Gilliland,49900,240.79,169.75,310.95,327.55,288.69,44343073 | 44343076 | 44343079 | 44343091 | 44343085 | 44343103
+3,Denny Hamlin | Ryan Blaney | William Byron | Chase Elliott | Daniel Suarez | Cody Ware,50000,240.76,168.95,309.46,326.8,288.05,44343073 | 44343076 | 44343079 | 44343082 | 44343091 | 44343107
+4,Denny Hamlin | Ryan Blaney | Ty Gibbs | Brad Keselowski | Daniel Suarez | AJ Allmendinger,49400,239.12,165.1,308.36,327.55,287.38,44343073 | 44343076 | 44343080 | 44343088 | 44343091 | 44343099
+5,Ryan Blaney | Christopher Bell | William Byron | Brad Keselowski | Daniel Suarez | AJ Allmendinger,49400,239.16,167.84,308.7,326.55,287.13,44343076 | 44343074 | 44343079 | 44343088 | 44343091 | 44343099
+6,Denny Hamlin | Ryan Blaney | Chase Elliott | Brad Keselowski | Daniel Suarez | Erik Jones,49600,238.19,166.35,307.75,326.05,286.33,44343073 | 44343076 | 44343082 | 44343088 | 44343091 | 44343093
+7,Denny Hamlin | Ryan Blaney | William Byron | Brad Keselowski | Chris Buescher | Cody Ware,49500,237.47,166.0,307.25,324.65,285.43,44343073 | 44343076 | 44343079 | 44343088 | 44343085 | 44343107
+8,Denny Hamlin | Ryan Blaney | William Byron | Chase Elliott | AJ Allmendinger | Todd Gilliland,49900,237.72,166.55,306.5,324.05,285.13,44343073 | 44343076 | 44343079 | 44343082 | 44343099 | 44343103
+9,Denny Hamlin | Ryan Blaney | William Byron | Brad Keselowski | Erik Jones | Michael McDowell,49800,236.8,165.35,307.35,324.2,285.03,44343073 | 44343076 | 44343079 | 44343088 | 44343093 | 44343095
+10,Denny Hamlin | Ryan Blaney | William Byron | Ty Gibbs | John H. Nemechek | Ricky Stenhouse Jr,50000,237.08,165.45,306.45,324.15,284.9,44343073 | 44343076 | 44343079 | 44343080 | 44343101 | 44343104

@@ -1,4 +1,4 @@
-# NASCAR Predictor V1.1
+# NASCAR Predictor V1.2
 
 A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:
 
@@ -49,3 +49,11 @@ track-archetype weights using walk-forward backtesting.
 
 ## V1.1 upgrade
 Ceiling optimization now evaluates six-driver rosters within the same Monte Carlo race outcomes. Added complete 2026 spring Las Vegas finishing/start/laps-led evidence for the current DK field where available.
+
+## V1.2 intelligence upgrade
+- Expanded Next Gen 1.5-mile dominator priors.
+- Added current speed / Chase-form evidence where supported.
+- Reliability-aware uncertainty: incomplete drivers get wider simulation distributions instead of false certainty.
+- Starting-grid architecture: qualifying position drives place-differential room and a modest front-start dominator effect.
+- Diagnostics tab with model confidence and optimizer exposure.
+- Saturday update remains one CSV upload; do not confuse qualifying order with official starting position.
