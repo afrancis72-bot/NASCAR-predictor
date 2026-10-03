@@ -171,7 +171,11 @@ def simulate(features, config=Config()):
     # Simulation: latent performance + incident tail. V1 intentionally transparent.
     for s in range(sims):
         sigma = 1.85 - 0.65*features["model_confidence"].to_numpy(float)
-        latent = strength + rng.normal(0, sigma, n)
+        # V1.4.1: modest track-position anchor. Starting position is predictive of finish,
+        # so front starters retain some track-position value and deep starters must earn PD.
+        # This changes finish probabilities, not DraftKings scoring.
+        start_anchor = -((starts - starts.mean()) / (starts.std() if starts.std() > 1e-9 else 1.0))
+        latent = strength + 0.22*start_anchor + rng.normal(0, sigma, n)
         incidents = rng.random(n) < dnf
         latent[incidents] -= rng.uniform(2.5,5.5,incidents.sum())
         order = np.argsort(-latent)
