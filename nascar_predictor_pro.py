@@ -208,7 +208,7 @@ def simulate(features, config=Config()):
     out["value_per_1k"] = out["proj_dk"]/(out["Salary"]/1000)
     return out.sort_values("proj_dk",ascending=False).reset_index(drop=True), dkpts
 
-def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_overlap=4, objective="ceiling"):
+def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_overlap=4, objective="ceiling", max_exposure=1.0):
     try:
         from scipy.optimize import milp, LinearConstraint, Bounds
     except Exception as e:
@@ -217,10 +217,16 @@ def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_ov
     scores = proj[score_col].to_numpy(float)
     sal = proj["Salary"].to_numpy(float)
     n=len(proj); lineups=[]
+    max_count=max(1, int(np.floor(n_lineups*max_exposure + 1e-9)))
+    exposure_counts=np.zeros(n,dtype=int)
     constraints=[LinearConstraint(np.ones((1,n)),[roster_size],[roster_size]),
                  LinearConstraint(sal.reshape(1,-1),[-np.inf],[salary_cap])]
     for _ in range(n_lineups):
         cons=list(constraints)
+        capped=np.where(exposure_counts>=max_count)[0]
+        for i in capped:
+            a=np.zeros(n); a[i]=1
+            cons.append(LinearConstraint(a.reshape(1,-1),[0],[0]))
         for prev in lineups:
             a=np.zeros(n); a[prev]=1
             cons.append(LinearConstraint(a.reshape(1,-1),[-np.inf],[max_overlap]))
@@ -228,6 +234,7 @@ def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_ov
         if not res.success: break
         idx=np.where(res.x>0.5)[0].tolist()
         lineups.append(idx)
+        exposure_counts[idx]+=1
     rows=[]
     for k,idx in enumerate(lineups,1):
         sub=proj.iloc[idx]
@@ -368,16 +375,25 @@ def _candidate_lineup_matrix(lineups, features):
     return np.asarray(mats,dtype=int), valid
 
 def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=50000,
-                                roster_size=6, max_overlap=4, candidate_pool=1800, seed=42):
+                                roster_size=6, max_overlap=4, candidate_pool=1800, seed=42,
+                                max_exposure=1.0):
     """
     V1.3: build many legal candidates, score them inside coherent races, then
     reward portfolios that cover empirically occurring race scripts. No driver
-    is forced in/out and there are no manual exposure caps.
+    is forced in/out. V1.4.2 adds a user-controlled hard portfolio exposure cap.
     """
     base=optimize_race_sim_lineups(features,sim_matrix,n_lineups=max(250,min(candidate_pool,900)),
                                   salary_cap=salary_cap,roster_size=roster_size,
                                   max_overlap=roster_size,candidate_pool=candidate_pool,
                                   seed=seed,risk_mode="gpp")
+    # Seed the candidate bank with a guaranteed-feasible portfolio under the
+    # requested exposure/overlap rules. The scenario search can improve on it,
+    # but will not get trapped with fewer than the requested number of lineups.
+    seed_port=optimize_lineups(features,n_lineups=n_lineups,salary_cap=salary_cap,
+                              roster_size=roster_size,max_overlap=max_overlap,
+                              objective="ceiling",max_exposure=max_exposure)
+    if len(seed_port):
+        base=pd.concat([base,seed_port],ignore_index=True,sort=False).drop_duplicates("Drivers").reset_index(drop=True)
     idxs, valid=_candidate_lineup_matrix(base,features)
     if len(valid)==0: return base.head(n_lineups)
 
@@ -410,31 +426,44 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
 
     overall=0.30*z(mean)+0.25*z(p90)+0.20*z(p95)+0.25*scenario_component
 
-    # Greedy diversified portfolio. Overlap rule remains user-controlled.
+    # V1.4.2 portfolio construction starts from the guaranteed-feasible seed
+    # portfolio, then locally upgrades lineups with stronger scenario candidates
+    # while preserving the hard exposure and pairwise-overlap constraints.
+    max_count=max(1, int(np.floor(n_lineups*max_exposure + 1e-9)))
+    cand_sets=[set(x.tolist()) for x in idxs]
+    driver_tuple_to_j={tuple(sorted(x.tolist())):j for j,x in enumerate(idxs)}
+    seed_idxs, _seed_valid=_candidate_lineup_matrix(seed_port,features)
     chosen=[]
-    chosen_sets=[]
-    remaining=list(np.argsort(overall)[::-1])
-    while remaining and len(chosen)<n_lineups:
-        best=None; best_adj=-1e99
-        for j in remaining[:500]:
-            sset=set(idxs[j].tolist())
-            if any(len(sset & old)>max_overlap for old in chosen_sets):
-                continue
-            # Marginal script coverage bonus: reward a lineup that is strong
-            # where already-selected lineups are weaker.
-            bonus=0.0
-            if chosen:
-                for s in scripts:
-                    prior=max(script_scores[s][k] for k in chosen)
-                    bonus += probs[s]*max(0.0,script_scores[s][j]-prior)
-                bonus*=0.015
-            adj=overall[j]+bonus
-            if adj>best_adj:
-                best_adj=adj; best=j
-        if best is None: break
-        chosen.append(best); chosen_sets.append(set(idxs[best].tolist()))
-        remaining.remove(best)
+    for x in seed_idxs:
+        j=driver_tuple_to_j.get(tuple(sorted(x.tolist())))
+        if j is not None: chosen.append(j)
+    if len(chosen)<n_lineups:
+        raise RuntimeError(f"Could not seed {n_lineups} legal lineups under max exposure {max_exposure:.0%} and max overlap {max_overlap}.")
+    chosen=chosen[:n_lineups]
 
+    def legal_portfolio(js):
+        counts=np.zeros(len(features),dtype=int)
+        sets=[cand_sets[j] for j in js]
+        for ss in sets: counts[list(ss)]+=1
+        if counts.max()>max_count: return False
+        for a in range(len(sets)):
+            for b in range(a):
+                if len(sets[a] & sets[b])>max_overlap: return False
+        return True
+
+    # Coordinate-ascent replacements: scenario score improves only when all
+    # portfolio risk constraints remain satisfied.
+    order=list(np.argsort(overall)[::-1])
+    improved=True; passes=0
+    while improved and passes<3:
+        improved=False; passes+=1
+        for pos in range(n_lineups):
+            current=chosen[pos]
+            for j in order:
+                if j in chosen or overall[j] <= overall[current]+1e-12: continue
+                trial=chosen.copy(); trial[pos]=j
+                if legal_portfolio(trial):
+                    chosen=trial; improved=True; break
     rows=[]
     for rank,j in enumerate(chosen,1):
         r=base.iloc[valid[j]].copy()
