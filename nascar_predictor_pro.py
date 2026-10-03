@@ -464,6 +464,40 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
                 trial=chosen.copy(); trial[pos]=j
                 if legal_portfolio(trial):
                     chosen=trial; improved=True; break
+    # V1.4.3: pair-swap rescue pass. A hard exposure cap can make a weak seed
+    # lineup impossible to improve with a one-at-a-time replacement even when
+    # two coordinated replacements produce a materially stronger legal portfolio.
+    # Search coordinated two-lineup swaps and maximize the portfolio's weak end
+    # first, then total scenario quality.
+    top_order=order[:min(len(order),500)]
+    def portfolio_key(js):
+        vals=np.asarray([overall[j] for j in js],dtype=float)
+        return (float(np.min(vals)), float(np.quantile(vals,.20)), float(np.sum(vals)))
+    best_key=portfolio_key(chosen)
+    pair_improved=True; pair_passes=0
+    while pair_improved and pair_passes<2:
+        pair_improved=False; pair_passes+=1
+        # Start with the weakest slots; that is where coordinated swaps matter.
+        weak_positions=list(np.argsort([overall[j] for j in chosen]))
+        for aa in range(min(5,len(weak_positions))):
+            a=weak_positions[aa]
+            for b in range(n_lineups):
+                if b==a: continue
+                keep=set(chosen); keep.discard(chosen[a]); keep.discard(chosen[b])
+                for j in top_order:
+                    if j in keep: continue
+                    for k in top_order:
+                        if k==j or k in keep: continue
+                        trial=chosen.copy(); trial[a]=j; trial[b]=k
+                        if not legal_portfolio(trial): continue
+                        key=portfolio_key(trial)
+                        if key > best_key:
+                            chosen=trial; best_key=key; pair_improved=True
+                            break
+                    if pair_improved: break
+                if pair_improved: break
+            if pair_improved: break
+
     rows=[]
     for rank,j in enumerate(chosen,1):
         r=base.iloc[valid[j]].copy()
