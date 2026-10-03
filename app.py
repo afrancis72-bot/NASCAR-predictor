@@ -6,8 +6,8 @@ from nascar_predictor_pro import Config, build_features, simulate, optimize_line
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.4.1", layout="wide")
-st.title("🏁 NASCAR Predictor V1.4.1")
+st.set_page_config(page_title="NASCAR Predictor V1.4.2", layout="wide")
+st.title("🏁 NASCAR Predictor V1.4.2")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -20,6 +20,7 @@ with st.sidebar:
     st.header("DFS")
     n_lineups=st.slider("Lineups",1,50,10)
     max_overlap=st.slider("Max shared drivers",0,5,4)
+    max_exposure=st.slider("Max driver exposure",0.10,1.00,0.60,0.05,format="%.0f%%")
     objective=st.selectbox("Optimizer objective",["ceiling","median","value"])
     salary_cap=st.number_input("Salary cap",value=50000,step=100)
 
@@ -72,16 +73,17 @@ with tab2:
 with tab3:
     st.subheader("DraftKings lineup optimizer")
     if objective == "ceiling":
-        st.caption("V1.4.1 Scenario GPP mode: lineups are evaluated across coherent race scripts; script weights come from the Monte Carlo rather than manual exposure rules.")
+        st.caption("V1.4.2 Scenario GPP mode: lineups are evaluated across coherent race scripts with a user-controlled hard maximum driver exposure.")
     if objective == "ceiling":
         lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
             roster_size=6,max_overlap=int(max_overlap),candidate_pool=1800,
-            seed=int(seed))
+            seed=int(seed),max_exposure=float(max_exposure))
     else:
         lineups=optimize_lineups(
             proj,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
-            roster_size=6,max_overlap=int(max_overlap),objective=objective)
+            roster_size=6,max_overlap=int(max_overlap),objective=objective,
+            max_exposure=float(max_exposure))
     st.dataframe(lineups,use_container_width=True)
     st.download_button("Download lineups",lineups.to_csv(index=False).encode(),
                        file_name="nascar_v1_lineups.csv")
@@ -108,7 +110,7 @@ with tab6:
         diag_lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
             roster_size=6,max_overlap=int(max_overlap),candidate_pool=1400,
-            seed=int(seed))
+            seed=int(seed),max_exposure=float(max_exposure))
         expo=portfolio_exposure(diag_lineups,proj)
         st.markdown("#### Current optimizer exposure")
         st.dataframe(expo,use_container_width=True)
