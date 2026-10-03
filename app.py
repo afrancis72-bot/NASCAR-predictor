@@ -6,8 +6,8 @@ from nascar_predictor_pro import Config, build_features, simulate, optimize_line
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.4", layout="wide")
-st.title("🏁 NASCAR Predictor V1.4")
+st.set_page_config(page_title="NASCAR Predictor V1.4.1", layout="wide")
+st.title("🏁 NASCAR Predictor V1.4.1")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -72,7 +72,7 @@ with tab2:
 with tab3:
     st.subheader("DraftKings lineup optimizer")
     if objective == "ceiling":
-        st.caption("V1.4 Scenario GPP mode: lineups are evaluated across coherent race scripts; script weights come from the Monte Carlo rather than manual exposure rules.")
+        st.caption("V1.4.1 Scenario GPP mode: lineups are evaluated across coherent race scripts; script weights come from the Monte Carlo rather than manual exposure rules.")
     if objective == "ceiling":
         lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
