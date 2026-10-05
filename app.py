@@ -6,8 +6,8 @@ from nascar_predictor_pro import Config, build_features, simulate, optimize_line
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.5", layout="wide")
-st.title("🏁 NASCAR Predictor V1.5")
+st.set_page_config(page_title="NASCAR Predictor V1.5.1", layout="wide")
+st.title("🏁 NASCAR Predictor V1.5.1")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -20,7 +20,8 @@ with st.sidebar:
     st.header("DFS")
     n_lineups=st.slider("Lineups",1,50,10)
     max_overlap=st.slider("Max shared drivers",0,5,4)
-    max_exposure=st.slider("Max driver exposure",0.10,1.00,0.60,0.05,format="%.0f%%")
+    max_exposure_pct=st.slider("Max driver exposure (%)",10,100,60,5)
+    max_exposure=max_exposure_pct/100.0
     objective=st.selectbox("Optimizer objective",["ceiling","median","value"])
     salary_cap=st.number_input("Salary cap",value=50000,step=100)
 
