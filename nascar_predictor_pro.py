@@ -14,7 +14,7 @@ FINISH_POINTS = {
 
 @dataclass
 class Config:
-    sims: int = 25000
+    sims: int = 100000
     seed: int = 42
     salary_cap: int = 50000
     roster_size: int = 6
@@ -38,8 +38,12 @@ def _rank_signal(df):
     wts = []
     for c,w in zip(cols,weights):
         if c in df:
-            vals.append(_z(df[c], higher_better=False)*w)
-            wts.append(df[c].notna().astype(float)*w)
+            # Missing ranks are neutral. Do not let median-filled z-scores leak into
+            # the numerator when a driver did not run that practice length.
+            observed = df[c].notna()
+            component = _z(df[c], higher_better=False).where(observed, 0.0)
+            vals.append(component*w)
+            wts.append(observed.astype(float)*w)
     if not vals:
         return pd.Series(0.0,index=df.index)
     num = sum(vals)
@@ -129,6 +133,7 @@ def build_features(dk, priors, track, updates=None):
         raw += 0.03*(0.50*intermediate + 0.50*vegas)
 
     df["race_strength"] = raw
+    df["track_volatility"] = float(getattr(w, "volatility", 0.95))
     df["projected_start"] = df["qualifying_position"].fillna((len(df)+1)/2)
     # Dominator score deliberately differs from finish strength.
     start_front = _z(df["projected_start"], False)
@@ -182,11 +187,21 @@ def simulate(features, config=Config()):
         f = np.empty(n,dtype=np.int16); f[order]=np.arange(1,n+1)
         finish[s]=f
 
-        # Allocate dominator events using Dirichlet probabilities tied to latent speed.
+        # Dominator events need race-to-race concentration variance. A fixed softmax
+        # followed by a multinomial has the right mean but an unrealistically thin
+        # right tail for laps led. Draw a race-level Dirichlet share around the same
+        # pre-race expectation, then allocate laps from that share. This is symmetric:
+        # no driver is named or boosted, and the expected share remains driven by
+        # pre-race speed / practice / history / starting position.
         dscore = 0.52*dom + 0.48*latent
         p = np.exp(dscore - dscore.max()); p /= p.sum()
-        ll = rng.multinomial(config.laps, p)
-        flp = rng.multinomial(config.laps, np.sqrt(p)/np.sqrt(p).sum())
+        track_vol = float(features["track_volatility"].iloc[0]) if "track_volatility" in features else 0.95
+        concentration = 28.0 / max(track_vol, 0.35)
+        alpha = np.maximum(p * concentration, 0.015)
+        race_share = rng.dirichlet(alpha)
+        ll = rng.multinomial(config.laps, race_share)
+        fast_share = np.sqrt(race_share); fast_share /= fast_share.sum()
+        flp = rng.multinomial(config.laps, fast_share)
         laps_led[s]=ll; fastest[s]=flp
 
         fp = np.array([FINISH_POINTS.get(int(x),1) for x in f])
@@ -266,9 +281,17 @@ def optimize_race_sim_lineups(proj, sim_matrix, n_lineups=10, salary_cap=50000,
     base=proj["proj_dk"].to_numpy(float)
     candidates=set()
     attempts=max(candidate_pool*3,3000)
-    for _ in range(attempts):
-        noise=rng.normal(0,7.5,n)
-        score=base+noise
+    for attempt in range(attempts):
+        # Candidate diversity must come from coherent simulated race outcomes as
+        # well as independent projection noise. Otherwise a front-running driver
+        # with a lower median can have a genuine dominator tail yet never enter
+        # the candidate bank. Sample the actual race matrix on 40% of attempts;
+        # this is driver-agnostic and uses only pre-race simulation information.
+        if attempt % 5 in (0, 1):
+            score = sim_matrix[int(rng.integers(0, len(sim_matrix)))]
+        else:
+            noise=rng.normal(0,7.5,n)
+            score=base+noise
         cons=[
             LinearConstraint(np.ones((1,n)),[roster_size],[roster_size]),
             LinearConstraint(salary.reshape(1,-1),[-np.inf],[salary_cap])
@@ -426,6 +449,17 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
 
     overall=0.30*z(mean)+0.25*z(p90)+0.20*z(p95)+0.25*scenario_component
 
+    # Driver-specific dominator tails for portfolio coverage. These are not
+    # projection boosts: they score a lineup only inside simulated races where
+    # that pre-race dominator candidate reaches his own upper tail.
+    dom_rank=np.argsort(features["dominator_strength"].to_numpy(float))[::-1]
+    tail_candidates=list(dom_rank[:min(6,len(dom_rank))])
+    dom_tail_scores={}
+    for d in tail_candidates:
+        threshold=np.quantile(sim_matrix[:,d],0.85)
+        mask=sim_matrix[:,d] >= threshold
+        dom_tail_scores[d]=np.quantile(scores[mask],0.90,axis=0) if mask.sum()>=20 else p90.copy()
+
     # V1.4.2 portfolio construction starts from the guaranteed-feasible seed
     # portfolio, then locally upgrades lineups with stronger scenario candidates
     # while preserving the hard exposure and pairwise-overlap constraints.
@@ -441,7 +475,15 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
         raise RuntimeError(f"Could not seed {n_lineups} legal lineups under max exposure {max_exposure:.0%} and max overlap {max_overlap}.")
     chosen=chosen[:n_lineups]
 
-    def legal_portfolio(js):
+    # Portfolio-level dominator coverage. In multi-entry GPP play, a plausible
+    # front-running car should not be allowed to disappear solely because its
+    # median projection trails place-differential values. For portfolios of 10+
+    # lineups, require one lineup of coverage for each of the top six pre-race
+    # dominator-strength candidates. This is symmetric and driver-agnostic.
+    dom_order=np.argsort(features["dominator_strength"].to_numpy(float))[::-1]
+    coverage_drivers=list(dom_order[:min(6,len(dom_order))]) if n_lineups>=10 else []
+
+    def legal_portfolio(js, require_coverage=False):
         counts=np.zeros(len(features),dtype=int)
         sets=[cand_sets[j] for j in js]
         for ss in sets: counts[list(ss)]+=1
@@ -449,6 +491,9 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
         for a in range(len(sets)):
             for b in range(a):
                 if len(sets[a] & sets[b])>max_overlap: return False
+        if require_coverage and coverage_drivers:
+            covered=set().union(*sets) if sets else set()
+            if any(i not in covered for i in coverage_drivers): return False
         return True
 
     # Coordinate-ascent replacements: scenario score improves only when all
@@ -497,6 +542,29 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
                     if pair_improved: break
                 if pair_improved: break
             if pair_improved: break
+
+    # Final dominator-coverage repair: replace the weakest legal lineup when a
+    # top-six dominator candidate is absent. Candidate lineups still must satisfy
+    # salary, exposure, and overlap rules; among legal repairs choose the highest
+    # scenario score.
+    if coverage_drivers:
+        for d in coverage_drivers:
+            if any(d in cand_sets[j] for j in chosen):
+                continue
+            best=None
+            for pos in np.argsort([overall[j] for j in chosen]):
+                for j in order:
+                    if j in chosen or d not in cand_sets[j]: continue
+                    trial=chosen.copy(); trial[int(pos)]=j
+                    if legal_portfolio(trial):
+                        # For a missing dominator script, choose the lineup that
+                        # performs best when that driver's simulated ceiling hits,
+                        # while retaining a small overall-quality tiebreaker.
+                        repair_score=float(z(dom_tail_scores[d])[j] + 0.15*overall[j])
+                        if best is None or repair_score>best[0]: best=(repair_score,int(pos),j)
+                if best is not None: break
+            if best is not None:
+                _,pos,j=best; chosen[pos]=j
 
     rows=[]
     for rank,j in enumerate(chosen,1):

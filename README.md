@@ -1,3 +1,16 @@
+# NASCAR Predictor V1.6
+
+V1.6 preserves the V1.5.1 final-grid gate and 60% default exposure control, and improves GPP dominator-tail handling without driver-specific boosts.
+
+Key changes:
+- 100,000 simulations is the production default.
+- Official final qualifying grid remains mandatory for final GPP generation/export.
+- Practice-rank missing values are explicitly neutralized.
+- Race-level Dirichlet dominator shares create realistic right-tail variance while preserving pre-race expected shares.
+- Candidate generation mixes projection perturbations with coherent sampled simulated races.
+- For 10+ lineup portfolios, the top six pre-race dominator candidates receive at least one legal portfolio coverage lineup, selected using that driver's simulated upper-tail races.
+- No driver names or race results are hard-coded into the new logic.
+
 # NASCAR Predictor V1.4
 
 A CSV-driven NASCAR Cup DFS model built to mirror the architecture of the existing PGA predictor:

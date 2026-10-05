@@ -6,8 +6,8 @@ from nascar_predictor_pro import Config, build_features, simulate, optimize_line
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.5.1", layout="wide")
-st.title("🏁 NASCAR Predictor V1.5.1")
+st.set_page_config(page_title="NASCAR Predictor V1.6", layout="wide")
+st.title("🏁 NASCAR Predictor V1.6")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -39,7 +39,7 @@ with tab4:
     live=st.file_uploader("Practice / qualifying CSV",type="csv")
     updates=pd.read_csv(live) if live else None
     if updates is None:
-        st.info("V1A pre-practice mode: live-data weights are redistributed to stable priors. Place differential is provisional.")
+        st.info("PRE-QUALIFYING MODE: live-data weights are redistributed to stable priors. Place differential is provisional.")
     else:
         st.success(f"Loaded live updates for {len(updates)} drivers.")
 
@@ -95,7 +95,7 @@ with tab3:
     else:
         st.error("PRE-QUALIFYING MODE — " + grid_message)
     if objective == "ceiling":
-        st.caption("V1.5 Dynamic Scenario GPP mode: lineups are evaluated across coherent race scripts with a user-controlled hard maximum driver exposure.")
+        st.caption("V1.6 Dynamic Scenario GPP mode: lineups are evaluated across coherent race scripts with a user-controlled hard maximum driver exposure.")
     if objective == "ceiling" and not grid_ready:
         lineups=pd.DataFrame()
         st.warning("GPP lineup generation/export is locked until the official final qualifying grid is loaded. Pre-qualifying projections remain available for research only.")
@@ -112,7 +112,7 @@ with tab3:
     st.dataframe(lineups,use_container_width=True)
     if len(lineups):
         st.download_button("Download FINAL lineups",lineups.to_csv(index=False).encode(),
-                           file_name="nascar_v1_5_FINAL_lineups.csv")
+                           file_name="nascar_v1_6_FINAL_lineups.csv")
 
 with tab5:
     st.subheader("Track DNA")
