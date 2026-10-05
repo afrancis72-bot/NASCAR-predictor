@@ -6,8 +6,8 @@ from nascar_predictor_pro import Config, build_features, simulate, optimize_line
 
 ROOT=Path(__file__).resolve().parent
 DATA=ROOT; OUT=ROOT
-st.set_page_config(page_title="NASCAR Predictor V1.4.3", layout="wide")
-st.title("🏁 NASCAR Predictor V1.4.3")
+st.set_page_config(page_title="NASCAR Predictor V1.5", layout="wide")
+st.title("🏁 NASCAR Predictor V1.5")
 st.caption("Track DNA → Driver Strength → Monte Carlo → DraftKings Projection → Optimizer")
 
 with st.sidebar:
@@ -15,7 +15,7 @@ with st.sidebar:
     track_file=DATA/"track_profiles.csv"
     track=pd.read_csv(track_file)
     st.write(track.loc[0,"track"])
-    sims=st.selectbox("Simulations",[1000,5000,10000,25000,50000,100000],index=3)
+    sims=st.selectbox("Simulations",[1000,5000,10000,25000,50000,100000],index=5)
     seed=st.number_input("Seed",value=42,step=1)
     st.header("DFS")
     n_lineups=st.slider("Lineups",1,50,10)
@@ -41,6 +41,23 @@ with tab4:
         st.info("V1A pre-practice mode: live-data weights are redistributed to stable priors. Place differential is provisional.")
     else:
         st.success(f"Loaded live updates for {len(updates)} drivers.")
+
+# V1.5 final-grid gate: a GPP portfolio must never be presented as final when
+# qualifying positions are missing, duplicated, or incomplete.
+def _final_grid_ready(updates, field_size):
+    if updates is None or "qualifying_position" not in updates.columns or "Name" not in updates.columns:
+        return False, "Upload the completed Saturday practice/qualifying CSV before generating final GPP lineups."
+    q=pd.to_numeric(updates["qualifying_position"],errors="coerce")
+    if len(updates) != field_size or q.isna().any():
+        return False, f"Final grid incomplete: need qualifying positions for all {field_size} drivers."
+    if updates["Name"].duplicated().any() or q.duplicated().any():
+        return False, "Final grid invalid: driver names and qualifying positions must be unique."
+    expected=set(range(1,field_size+1))
+    if set(q.astype(int)) != expected:
+        return False, f"Final grid invalid: qualifying positions must be exactly 1 through {field_size}."
+    return True, "Final qualifying grid validated."
+
+grid_ready, grid_message = _final_grid_ready(updates, len(dk_default))
 
 features=build_features(dk_default,pri_default,track,updates)
 cfg=Config(sims=int(sims),seed=int(seed),salary_cap=int(salary_cap),roster_size=6,
@@ -72,9 +89,16 @@ with tab2:
 
 with tab3:
     st.subheader("DraftKings lineup optimizer")
+    if grid_ready:
+        st.success("FINAL-GRID MODE — qualifying positions validated. GPP portfolio is eligible for export.")
+    else:
+        st.error("PRE-QUALIFYING MODE — " + grid_message)
     if objective == "ceiling":
-        st.caption("V1.4.3 Scenario GPP mode: lineups are evaluated across coherent race scripts with a user-controlled hard maximum driver exposure.")
-    if objective == "ceiling":
+        st.caption("V1.5 Dynamic Scenario GPP mode: lineups are evaluated across coherent race scripts with a user-controlled hard maximum driver exposure.")
+    if objective == "ceiling" and not grid_ready:
+        lineups=pd.DataFrame()
+        st.warning("GPP lineup generation/export is locked until the official final qualifying grid is loaded. Pre-qualifying projections remain available for research only.")
+    elif objective == "ceiling":
         lineups=optimize_scenario_portfolio(
             proj,sim_matrix,n_lineups=int(n_lineups),salary_cap=int(salary_cap),
             roster_size=6,max_overlap=int(max_overlap),candidate_pool=1800,
@@ -85,8 +109,9 @@ with tab3:
             roster_size=6,max_overlap=int(max_overlap),objective=objective,
             max_exposure=float(max_exposure))
     st.dataframe(lineups,use_container_width=True)
-    st.download_button("Download lineups",lineups.to_csv(index=False).encode(),
-                       file_name="nascar_v1_lineups.csv")
+    if len(lineups):
+        st.download_button("Download FINAL lineups",lineups.to_csv(index=False).encode(),
+                           file_name="nascar_v1_5_FINAL_lineups.csv")
 
 with tab5:
     st.subheader("Track DNA")

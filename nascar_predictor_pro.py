@@ -334,15 +334,17 @@ def portfolio_exposure(lineups, proj):
 
 
 def classify_race_scripts(features, sim_matrix):
-    """Classify each coherent simulated race into a DFS-relevant race script."""
-    names=features["Name"].tolist()
-    dom=features["dominator_strength"].to_numpy(float)
-    elite_idx=np.argsort(dom)[::-1][:4]
-    ham_idx=names.index("Denny Hamlin") if "Denny Hamlin" in names else None
-    lar_idx=names.index("Kyle Larson") if "Kyle Larson" in names else None
+    """Classify coherent simulated races using CURRENT dynamic dominator candidates.
 
-    # A high-scoring driver is a practical proxy for dominator/PD concentration
-    # because sim_matrix already includes finishing, PD, laps led and fastest laps.
+    V1.5 removes driver-name hard-coding. The two highest dominator-strength
+    drivers after any live practice/qualifying update define the concentrated
+    dominator scripts for that slate.
+    """
+    dom=features["dominator_strength"].to_numpy(float)
+    dom_order=np.argsort(dom)[::-1]
+    primary_idx=int(dom_order[0]) if len(dom_order) else None
+    secondary_idx=int(dom_order[1]) if len(dom_order)>1 else None
+
     order=np.argsort(sim_matrix,axis=1)[:,::-1]
     top1=sim_matrix[np.arange(len(sim_matrix)),order[:,0]]
     top2=sim_matrix[np.arange(len(sim_matrix)),order[:,1]]
@@ -350,17 +352,15 @@ def classify_race_scripts(features, sim_matrix):
     spread=top1-top3
 
     labels=np.full(len(sim_matrix),"split_dominator",dtype=object)
-    # Chaos: unusually compressed top scores / multiple value paths.
     labels[spread < np.quantile(spread,.22)]="chaos_attrition"
-    # Track-position / concentrated domination.
     labels[spread > np.quantile(spread,.78)]="track_position"
 
-    if ham_idx is not None:
-        ham=sim_matrix[:,ham_idx]
-        labels[(ham >= np.quantile(ham,.82)) & (ham >= top2)]="hamlin_dominant"
-    if lar_idx is not None:
-        lar=sim_matrix[:,lar_idx]
-        labels[(lar >= np.quantile(lar,.82)) & (lar >= top2)]="larson_dominant"
+    if primary_idx is not None:
+        x=sim_matrix[:,primary_idx]
+        labels[(x >= np.quantile(x,.82)) & (x >= top2)]="primary_dominator"
+    if secondary_idx is not None:
+        x=sim_matrix[:,secondary_idx]
+        labels[(x >= np.quantile(x,.82)) & (x >= top2)]="secondary_dominator"
     return labels
 
 def _candidate_lineup_matrix(lineups, features):
@@ -398,7 +398,7 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
     if len(valid)==0: return base.head(n_lineups)
 
     labels=classify_race_scripts(features,sim_matrix)
-    scripts=["hamlin_dominant","larson_dominant","split_dominator","chaos_attrition","track_position"]
+    scripts=["primary_dominator","secondary_dominator","split_dominator","chaos_attrition","track_position"]
     probs={s:float(np.mean(labels==s)) for s in scripts}
 
     # Candidate score distribution from the SAME simulated races.
@@ -515,7 +515,7 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
 
 def scenario_summary(features, sim_matrix):
     labels=classify_race_scripts(features,sim_matrix)
-    order=["hamlin_dominant","larson_dominant","split_dominator","chaos_attrition","track_position"]
+    order=["primary_dominator","secondary_dominator","split_dominator","chaos_attrition","track_position"]
     return pd.DataFrame({
         "Race script":order,
         "Simulation probability":[float(np.mean(labels==s)) for s in order]
