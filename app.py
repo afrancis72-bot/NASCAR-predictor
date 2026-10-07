@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.5",layout="wide")
-st.title("🏁 NASCAR Predictor V2.5")
+st.set_page_config(page_title="NASCAR Predictor V2.6",layout="wide")
+st.title("🏁 NASCAR Predictor V2.6")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -174,6 +174,12 @@ with st.sidebar:
 
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
 features=build_features(dk,priors,track,updates)
+# V2.6: Reference DNA is authoritative for coverage/confidence.
+if {"data_coverage_pct","model_confidence"}.issubset(reference_dna.columns):
+    _cov=reference_dna[["Name","data_coverage_pct","model_confidence"]].copy()
+    features=features.drop(columns=["data_coverage","model_confidence"],errors="ignore").merge(_cov,on="Name",how="left")
+    features["data_coverage"]=features["data_coverage_pct"]/100.0
+
 cfg=Config(sims=int(sims),seed=int(seed),salary_cap=int(salary_cap),roster_size=6,
            laps=int(track.iloc[0]["laps"]),max_overlap=int(max_overlap))
 proj,sim_matrix=simulate(features,cfg)
@@ -212,7 +218,7 @@ with driver_tab:
     board.insert(0,"DNA Rank",range(1,len(board)+1))
     st.dataframe(board,use_container_width=True,hide_index=True)
     st.markdown("#### Driver DNA components")
-    dna_cols=["Name","driver_dna_score","recent_form_score","place_diff_score","track_fit_score","dominator_score","reliability_score","dk_market_score","data_coverage_pct","model_confidence"]
+    dna_cols=["Name","driver_dna_score","recent_form_score","place_diff_score","track_fit_score","comparable_track_score","reliability_score","dk_market_score","data_coverage_pct","model_confidence"]
     available=[c for c in dna_cols if c in reference_dna.columns]
     if available:
         st.dataframe(reference_dna[available].sort_values("driver_dna_score",ascending=False),use_container_width=True,hide_index=True)
@@ -229,6 +235,8 @@ with driver_tab:
     audit_cols=[c for c in ["Name","audit_dk_prior","audit_current","audit_track_type","audit_track_history",
                             "practice_z","projected_start","data_coverage","model_confidence"] if c in features.columns]
     st.dataframe(features.loc[features["Name"]==name,audit_cols].T,use_container_width=True)
+
+coverage_ready = ("data_coverage_pct" in reference_dna.columns and reference_dna["data_coverage_pct"].median() >= 55)
 
 with sim_tab:
     st.subheader("Race simulations")
