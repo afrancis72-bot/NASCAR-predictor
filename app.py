@@ -4,7 +4,7 @@ import numpy as np
 import streamlit as st
 from nascar_auto_intelligence import build_auto_intelligence
 from source_diagnostic import run_source_diagnostic
-from nascar_reference_dna import build_reference_dna, blend_driver_dna, driver_page, _tables, _flat
+from nascar_reference_dna import build_reference_dna, blend_driver_dna, driver_page, _tables, _flat, parse_profile_text
 from nascar_predictor_pro import (
     Config, build_features, simulate, optimize_lineups, portfolio_exposure,
     optimize_scenario_portfolio, scenario_summary, construct_track_dna
@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.7",layout="wide")
-st.title("🏁 NASCAR Predictor V2.7")
+st.set_page_config(page_title="NASCAR Predictor V2.8",layout="wide")
+st.title("🏁 NASCAR Predictor V2.8")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -150,7 +150,7 @@ if "track_history_avg_finish" in priors.columns: priors["track_history_avg_finis
 if "track_history_laps_led" in priors.columns: priors["track_history_laps_led"]=priors["track_history_laps_led"]
 with extract_tab:
     st.subheader("NASCAR Reference — Extraction Diagnostic")
-    st.write("This page shows the raw tables returned for one driver and the exact values V2.7 extracted. It does not alter the model.")
+    st.write("This page shows the raw tables returned for one driver and the exact values V2.8 extracted. It does not alter the model.")
     inspect_name=st.selectbox("Driver to inspect",dk["Name"].tolist(),key="extract_driver")
     extracted=reference_raw.loc[reference_raw["Name"]==inspect_name].copy()
     if len(extracted):
@@ -159,6 +159,13 @@ with extract_tab:
     if st.button("Inspect raw NASCAR Reference tables"):
         try:
             html=driver_page(inspect_name)
+            parsed=parse_profile_text(html)
+            st.markdown("#### V2.8 text-parser output")
+            _diag={k:v for k,v in parsed.items() if k!="recent_rows"}
+            st.dataframe(pd.DataFrame({"metric":list(_diag.keys()),"value":list(_diag.values())}),use_container_width=True,hide_index=True)
+            if parsed.get("recent_rows"):
+                st.markdown("#### Parsed recent Cup races")
+                st.dataframe(pd.DataFrame(parsed["recent_rows"]),use_container_width=True,hide_index=True)
             tabs=[_flat(t) for t in _tables(html)]
             st.success(f"Retrieved {len(html):,} HTML characters and found {len(tabs)} HTML tables.")
             if not tabs:
@@ -200,7 +207,7 @@ with st.sidebar:
 
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
 features=build_features(dk,priors,track,updates)
-# V2.7: Reference DNA is authoritative for coverage/confidence.
+# V2.8: Reference DNA is authoritative for coverage/confidence.
 if {"data_coverage_pct","model_confidence"}.issubset(reference_dna.columns):
     _cov=reference_dna[["Name","data_coverage_pct","model_confidence"]].copy()
     # priors may already have these V2.6 columns, so build_features can carry them through.
@@ -251,7 +258,7 @@ with driver_tab:
     board.insert(0,"DNA Rank",range(1,len(board)+1))
     st.dataframe(board,use_container_width=True,hide_index=True)
     st.markdown("#### Driver DNA components")
-    dna_cols=["Name","driver_dna_score","recent_form_score","place_diff_score","track_fit_score","comparable_track_score","reliability_score","dk_market_score","data_coverage_pct","model_confidence"]
+    dna_cols=["Name","driver_dna_score","recent_form_score","place_diff_score","comparable_track_score","track_type_elo_score","reliability_score","dk_market_score","data_coverage_pct","model_confidence"]
     available=[c for c in dna_cols if c in reference_dna.columns]
     if available:
         st.dataframe(reference_dna[available].sort_values("driver_dna_score",ascending=False),use_container_width=True,hide_index=True)
