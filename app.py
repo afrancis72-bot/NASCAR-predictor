@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.10",layout="wide")
-st.title("🏁 NASCAR Predictor V2.10")
+st.set_page_config(page_title="NASCAR Predictor V2.11",layout="wide")
+st.title("🏁 NASCAR Predictor V2.11")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -163,13 +163,13 @@ if "comparable_track_avg_finish" in priors.columns:
 # season_avg_finish and recent_avg_finish already use the engine's generic names.
 with extract_tab:
     st.subheader("NASCAR Reference — Extraction Diagnostic")
-    st.write("This page shows the raw tables returned for one driver and the exact values V2.10 extracted. It does not alter the model.")
+    st.write("This page shows the raw tables returned for one driver and the exact values V2.11 extracted. It does not alter the model.")
     inspect_name=st.selectbox("Driver to inspect",dk["Name"].tolist(),key="extract_driver")
     if st.button("Inspect NASCAR Reference extraction"):
         try:
             html=driver_page(inspect_name)
             parsed=parse_profile_text(html)
-            st.markdown("#### V2.10 text-parser output")
+            st.markdown("#### V2.11 text-parser output")
             _diag={k:v for k,v in parsed.items() if k!="recent_rows"}
             st.dataframe(pd.DataFrame({"metric":list(_diag.keys()),"value":list(_diag.values())}),use_container_width=True,hide_index=True)
             if parsed.get("recent_rows"):
@@ -215,7 +215,24 @@ with st.sidebar:
     objective=st.selectbox("Build style",["ceiling","median","value"])
 
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
+# V2.11 PIPELINE TRACE — checkpoint 2, exactly what is handed to build_features().
+_trace_cols=[
+    "Name","season_avg_finish","recent_avg_finish","recent_avg_start","recent_place_diff",
+    "comparable_track_avg_finish","superspeedway_avg_finish","superspeedway_elo",
+    "recent_form_score","place_diff_score","comparable_track_score",
+    "track_type_elo_score","reliability_score","driver_dna_score"
+]
+_trace_pre=priors[[c for c in _trace_cols if c in priors.columns]].copy()
+
 features=build_features(dk,priors,track,updates)
+
+# V2.11 PIPELINE TRACE — checkpoint 3, engine output.
+_trace_post_cols=[
+    "Name","audit_reference_dna","audit_reference_form","audit_reference_pd",
+    "audit_reference_track","audit_reference_elo","audit_reference_reliability",
+    "audit_current","audit_track_type","race_strength","track_dna_fit","dominator_strength"
+]
+_trace_post=features[[c for c in _trace_post_cols if c in features.columns]].copy()
 
 # V2.10 safety gate: a working Reference integration must create cross-driver spread.
 _ref_audit_cols=["audit_reference_form","audit_reference_pd","audit_reference_track",
@@ -262,6 +279,49 @@ with dna_tab:
 
 with driver_tab:
     st.subheader("Driver DNA")
+
+    st.markdown("### 🧬 V2.11 Pipeline Trace")
+    st.caption("Temporary diagnostic: follows NASCAR Reference data through parser/scoring → engine input → engine output.")
+
+    st.markdown("#### Checkpoint 1 — NASCAR Reference scored output")
+    _cp1_cols=[
+        "Name","season_avg_finish","recent_avg_finish","recent_avg_start","recent_place_diff",
+        "comparable_track_avg_finish","superspeedway_avg_finish","superspeedway_elo",
+        "recent_form_score","place_diff_score","comparable_track_score",
+        "track_type_elo_score","reliability_score","driver_dna_score","reference_coverage"
+    ]
+    _cp1_cols=[c for c in _cp1_cols if c in reference_dna.columns]
+    st.dataframe(reference_dna[_cp1_cols],use_container_width=True,hide_index=True)
+
+    st.markdown("#### Checkpoint 2 — Exact dataframe immediately before `build_features()`")
+    st.dataframe(_trace_pre,use_container_width=True,hide_index=True)
+
+    st.markdown("#### Checkpoint 3 — Exact Reference signals immediately after `build_features()`")
+    st.dataframe(_trace_post,use_container_width=True,hide_index=True)
+
+    # Automatic localization of the break.
+    _score_cols=["recent_form_score","place_diff_score","comparable_track_score",
+                 "track_type_elo_score","reliability_score","driver_dna_score"]
+    def _has_spread(frame, cols):
+        for _c in cols:
+            if _c in frame.columns:
+                _v=pd.to_numeric(frame[_c],errors="coerce")
+                if _v.notna().sum()>=2 and float(_v.std(skipna=True) or 0)>1e-8:
+                    return True
+        return False
+    _cp1_ok=_has_spread(reference_dna,_score_cols)
+    _cp2_ok=_has_spread(_trace_pre,_score_cols)
+    _cp3_ok=_has_spread(_trace_post,["audit_reference_form","audit_reference_pd",
+                                     "audit_reference_track","audit_reference_elo",
+                                     "audit_reference_reliability"])
+    if not _cp1_ok:
+        st.error("TRACE RESULT: break is at Checkpoint 1 — Reference scoring is not producing cross-driver signal.")
+    elif not _cp2_ok:
+        st.error("TRACE RESULT: break is between Checkpoints 1 and 2 — merge/handoff is dropping or flattening Reference scores.")
+    elif not _cp3_ok:
+        st.error("TRACE RESULT: break is between Checkpoints 2 and 3 — build_features() is zeroing/ignoring valid Reference inputs.")
+    else:
+        st.success("TRACE RESULT: all three checkpoints have cross-driver signal. Reference DNA reaches the engine.")
     if "loaded" in intel_status.lower():
         st.success("NASCAR REFERENCE DRIVER DNA — "+intel_status)
     else:
