@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.6.1",layout="wide")
-st.title("🏁 NASCAR Predictor V2.6.1")
+st.set_page_config(page_title="NASCAR Predictor V2.6.2",layout="wide")
+st.title("🏁 NASCAR Predictor V2.6.2")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -174,14 +174,18 @@ with st.sidebar:
 
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
 features=build_features(dk,priors,track,updates)
-# V2.6.1: Reference DNA is authoritative for coverage/confidence.
+# V2.6.2: Reference DNA is authoritative for coverage/confidence.
 if {"data_coverage_pct","model_confidence"}.issubset(reference_dna.columns):
     _cov=reference_dna[["Name","data_coverage_pct","model_confidence"]].copy()
     # priors may already have these V2.6 columns, so build_features can carry them through.
     # Prefer the authoritative Reference values without creating _x/_y collisions.
     features=features.drop(columns=["data_coverage","data_coverage_pct","model_confidence"],errors="ignore")
     features=features.merge(_cov,on="Name",how="left")
-    features["data_coverage"]=features["data_coverage_pct"]/100.0
+    features["data_coverage"]=pd.to_numeric(features["data_coverage_pct"],errors="coerce").fillna(15.0)/100.0
+    # Simulation engine requires numeric confidence. Keep the human-readable label separately.
+    features["model_confidence_label"]=features["model_confidence"].astype(str)
+    _confidence_map={"HIGH":0.90,"MEDIUM":0.70,"LOW":0.45}
+    features["model_confidence"]=features["model_confidence_label"].str.upper().map(_confidence_map).fillna(0.45).astype(float)
 
 cfg=Config(sims=int(sims),seed=int(seed),salary_cap=int(salary_cap),roster_size=6,
            laps=int(track.iloc[0]["laps"]),max_overlap=int(max_overlap))
