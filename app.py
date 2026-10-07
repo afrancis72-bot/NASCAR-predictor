@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 from nascar_auto_intelligence import build_auto_intelligence
+from source_diagnostic import run_source_diagnostic
 from nascar_predictor_pro import (
     Config, build_features, simulate, optimize_lineups, portfolio_exposure,
     optimize_scenario_portfolio, scenario_summary, construct_track_dna
@@ -10,8 +11,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.3",layout="wide")
-st.title("🏁 NASCAR Predictor V2.3")
+st.set_page_config(page_title="NASCAR Predictor V2.4",layout="wide")
+st.title("🏁 NASCAR Predictor V2.4")
 st.caption("Select Track → Upload DK → NASCAR Intelligence → Driver DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -67,8 +68,8 @@ def final_grid_ready(updates,field_size):
     if set(q.astype(int))!=set(range(1,field_size+1)): return False,f"Starting positions must be 1–{field_size}."
     return True,"Final grid validated."
 
-setup,dna_tab,driver_tab,live_tab,sim_tab,dfs_tab,audit_tab=st.tabs(
-["⚙️ Setup / Inputs","🧬 Track DNA","🏎️ Driver DNA","📡 Live Update","🎲 Race Simulations","💰 DFS Builder","📋 Post-Race Audit"])
+setup,source_tab,dna_tab,driver_tab,live_tab,sim_tab,dfs_tab,audit_tab=st.tabs(
+["⚙️ Setup / Inputs","🔌 Source Diagnostic","🧬 Track DNA","🏎️ Driver DNA","📡 Live Update","🎲 Race Simulations","💰 DFS Builder","📋 Post-Race Audit"])
 
 with setup:
     st.subheader("Weekly race setup")
@@ -95,8 +96,29 @@ with live_tab:
     else:
         st.success(f"Loaded live updates for {len(updates)} drivers. The app will validate the official starting grid before unlocking final GPP builds.")
 
+with source_tab:
+    st.subheader("V2.4 Data Source Diagnostic")
+    st.write("Run this from the deployed Streamlit app. It tests the actual server-to-source connection before we wire a source into Driver DNA.")
+    st.caption("Green = reachable from Streamlit. A 401/403 means we do not build against that endpoint. Missing data is never treated as zero.")
+    if st.button("Run source diagnostic",type="primary"):
+        with st.spinner("Testing NASCAR Feed and NASCAR Reference from this Streamlit server..."):
+            diag=run_source_diagnostic()
+        st.session_state["source_diag"]=diag
+    if "source_diag" in st.session_state:
+        diag=st.session_state["source_diag"]
+        show=diag[["Source","HTTP","Reachable","Type","Bytes sampled","Seconds"]].copy()
+        st.dataframe(show,use_container_width=True,hide_index=True)
+        reachable=diag.loc[diag["Reachable"],"Source"].tolist()
+        if reachable:
+            st.success("Reachable sources: "+", ".join(reachable))
+        else:
+            st.error("None of the tested sources are reachable from this deployment.")
+        with st.expander("Technical details"):
+            st.dataframe(diag,use_container_width=True,hide_index=True)
+        st.download_button("Download diagnostic CSV",diag.to_csv(index=False).encode(),"nascar_source_diagnostic.csv","text/csv")
+
 if dk_raw is None:
-    st.warning("Upload the DraftKings salary CSV on Setup / Inputs to activate the model.")
+    st.warning("Upload the DraftKings salary CSV on Setup / Inputs to activate the model. Source Diagnostic can be run without DK.")
     st.stop()
 
 try:
