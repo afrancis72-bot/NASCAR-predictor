@@ -163,10 +163,25 @@ def build_features(dk, priors, track, updates=None):
     # Component scores are cross-field percentiles (0-100), converted to z-scores.
     df["reference_dna_z"] = _first_signal(df, ["driver_dna_score"], True)
     df["reference_form_z"] = _first_signal(df, ["recent_form_score"], True)
+    if df["reference_form_z"].abs().sum() < 1e-9:
+        df["reference_form_z"] = _first_signal(df, ["recent_avg_finish"], False)
+
     df["reference_pd_z"] = _first_signal(df, ["place_diff_score"], True)
+    if df["reference_pd_z"].abs().sum() < 1e-9:
+        df["reference_pd_z"] = _first_signal(df, ["recent_place_diff"], True)
+
     df["reference_track_z"] = _first_signal(df, ["comparable_track_score"], True)
+    if df["reference_track_z"].abs().sum() < 1e-9:
+        df["reference_track_z"] = _first_signal(df, ["comparable_track_avg_finish"], False)
+
     df["reference_elo_z"] = _first_signal(df, ["track_type_elo_score"], True)
+    if df["reference_elo_z"].abs().sum() < 1e-9:
+        df["reference_elo_z"] = _first_signal(df, ["superspeedway_elo"], True)
+
     df["reference_reliability_z"] = _first_signal(df, ["reliability_score"], True)
+    if df["reference_reliability_z"].abs().sum() < 1e-9:
+        # Season finish is a conservative observed-data fallback, not a fabricated value.
+        df["reference_reliability_z"] = _first_signal(df, ["season_avg_finish"], False)
 
     # Broad race strength: current-season results + recent form + reliability + DK prior.
     # Missing Reference signals are neutral (0 z), never converted to poor performance.

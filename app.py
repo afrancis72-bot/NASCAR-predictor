@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.9",layout="wide")
-st.title("🏁 NASCAR Predictor V2.9")
+st.set_page_config(page_title="NASCAR Predictor V2.10",layout="wide")
+st.title("🏁 NASCAR Predictor V2.10")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -144,6 +144,18 @@ with st.spinner("Building Driver DNA from NASCAR Reference..."):
         reference_dna=pd.DataFrame({"Name":dk["Name"]})
         intel_status=f"NASCAR Reference unavailable: {e}"
 priors=baseline.merge(reference_dna.drop(columns=["Salary","AvgPointsPerGame"],errors="ignore"),on="Name",how="left")
+
+# V2.10: explicit scored-DNA handoff.  This prevents a stale/duplicate column from
+# silently shadowing the Reference score that the engine expects.
+_reference_engine_cols=[
+    "season_avg_finish","recent_avg_finish","recent_avg_start","recent_place_diff",
+    "comparable_track_avg_finish","recent_form_score","place_diff_score",
+    "comparable_track_score","track_type_elo_score","reliability_score","driver_dna_score"
+]
+for _c in _reference_engine_cols:
+    if _c in reference_dna.columns:
+        _map=reference_dna.set_index("Name")[_c]
+        priors[_c]=priors["Name"].map(_map)
 # V2.9 integration map: NASCAR Reference fields become generic engine inputs.
 # Missing values remain NaN/neutral. Atlanta uses modern superspeedway-style comparable data.
 if "comparable_track_avg_finish" in priors.columns:
@@ -151,13 +163,13 @@ if "comparable_track_avg_finish" in priors.columns:
 # season_avg_finish and recent_avg_finish already use the engine's generic names.
 with extract_tab:
     st.subheader("NASCAR Reference — Extraction Diagnostic")
-    st.write("This page shows the raw tables returned for one driver and the exact values V2.9 extracted. It does not alter the model.")
+    st.write("This page shows the raw tables returned for one driver and the exact values V2.10 extracted. It does not alter the model.")
     inspect_name=st.selectbox("Driver to inspect",dk["Name"].tolist(),key="extract_driver")
     if st.button("Inspect NASCAR Reference extraction"):
         try:
             html=driver_page(inspect_name)
             parsed=parse_profile_text(html)
-            st.markdown("#### V2.9 text-parser output")
+            st.markdown("#### V2.10 text-parser output")
             _diag={k:v for k,v in parsed.items() if k!="recent_rows"}
             st.dataframe(pd.DataFrame({"metric":list(_diag.keys()),"value":list(_diag.values())}),use_container_width=True,hide_index=True)
             if parsed.get("recent_rows"):
@@ -204,6 +216,17 @@ with st.sidebar:
 
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
 features=build_features(dk,priors,track,updates)
+
+# V2.10 safety gate: a working Reference integration must create cross-driver spread.
+_ref_audit_cols=["audit_reference_form","audit_reference_pd","audit_reference_track",
+                 "audit_reference_elo","audit_reference_reliability"]
+_ref_present=[c for c in _ref_audit_cols if c in features.columns]
+_ref_spread={}
+for _c in _ref_present:
+    _v=pd.to_numeric(features[_c],errors="coerce")
+    _sd=_v.std(skipna=True)
+    _ref_spread[_c]=0.0 if pd.isna(_sd) else float(_sd)
+_reference_integration_ok=bool(_ref_present) and any(v>1e-8 for v in _ref_spread.values())
 # V2.8: Reference DNA is authoritative for coverage/confidence.
 if {"data_coverage_pct","model_confidence"}.issubset(reference_dna.columns):
     _cov=reference_dna[["Name","data_coverage_pct","model_confidence"]].copy()
@@ -261,13 +284,20 @@ with driver_tab:
         st.dataframe(reference_dna[available].sort_values("driver_dna_score",ascending=False),use_container_width=True,hide_index=True)
 
     st.markdown("#### Model integration audit")
-    st.caption("These are the normalized NASCAR Reference signals actually entering race strength / Track DNA fit. Non-zero spread confirms the source is influencing simulations.")
+    if _reference_integration_ok:
+        st.success("PASS — NASCAR Reference DNA is entering the race model.")
+    else:
+        st.error("FAIL — NASCAR Reference DNA has no cross-field model spread. Do not trust final simulations.")
+    st.caption("These are the normalized NASCAR Reference signals actually entering race strength / Track DNA fit. Positive and negative values across drivers confirm integration.")
     integration_cols=["Name","audit_reference_form","audit_reference_pd","audit_reference_track",
                       "audit_reference_elo","audit_reference_reliability","audit_current",
                       "audit_track_type","race_strength","track_dna_fit","dominator_strength"]
     integration_cols=[c for c in integration_cols if c in features.columns]
     st.dataframe(features[integration_cols].sort_values("race_strength",ascending=False),
                  use_container_width=True,hide_index=True)
+    if _ref_spread:
+        st.caption("Cross-field SD — " + " | ".join(
+            f"{k.replace('audit_reference_','')}: {v:.3f}" for k,v in _ref_spread.items()))
     name=st.selectbox("Inspect driver DNA",features["Name"].tolist())
     r=features.loc[features["Name"]==name].iloc[0]
     a,b,c,d=st.columns(4)
@@ -288,7 +318,10 @@ coverage_ready = ("data_coverage_pct" in reference_dna.columns and reference_dna
 
 with sim_tab:
     st.subheader("Race simulations")
-    st.success(f"{int(sims):,} coherent race simulations complete.")
+    if not _reference_integration_ok:
+        st.error("REFERENCE DNA SAFETY CHECK FAILED. Simulation output is diagnostic only; do not use it for final DFS decisions.")
+    else:
+        st.success(f"{int(sims):,} coherent race simulations complete with NASCAR Reference DNA integrated.")
     ss=scenario_summary(proj,sim_matrix)
     ss["Simulation probability"]=(ss["Simulation probability"]*100).round(1).astype(str)+"%"
     st.dataframe(ss,use_container_width=True,hide_index=True)
