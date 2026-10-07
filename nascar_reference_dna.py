@@ -77,8 +77,10 @@ def _metric_before_label(section,label):
 
 def parse_profile_text(html):
     txt=_page_text(html)
-    season=_between(txt,"2026 Cup Season","Best Tracks")
-    perf=_between(txt,"Performance Profile","2026 Cup Season")
+    # NASCAR Reference currently uses both headings across driver pages.
+    season_heading="2026 Cup Season" if "2026 Cup Season" in txt else "2026 Season"
+    season=_between(txt,season_heading,"Best Tracks")
+    perf=_between(txt,"Performance Profile",season_heading)
     recent=_between(txt,"Recent Results","Year-by-Year Results")
 
     out={
