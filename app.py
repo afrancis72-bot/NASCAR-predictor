@@ -9,9 +9,9 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.1",layout="wide")
-st.title("🏁 NASCAR Predictor V2.1")
-st.caption("Select Track → Upload DK → Auto Baseline → Track DNA → Practice/Qualifying → 100K Sims → DFS")
+st.set_page_config(page_title="NASCAR Predictor V2.2",layout="wide")
+st.title("🏁 NASCAR Predictor V2.2")
+st.caption("Select Track → Upload DK → Auto Driver DNA → Track DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
     f=st.file_uploader(label,type="csv",key=key)
@@ -33,12 +33,24 @@ def normalize_dk(dk):
     return d
 
 def auto_priors_from_dk(dk):
-    # Honest fallback: DK FPPG is the broad baseline. Specialized weekly signals
-    # remain missing/neutral until an optional enriched-priors file is supplied.
+    """
+    Automatic Driver DNA baseline from fields actually present in DraftKings.
+    Salary and FPPG are treated as broad market/performance priors. We do NOT
+    fabricate recent speed, track history, comparable-track results or DNF risk.
+    """
+    salary=pd.to_numeric(dk["Salary"],errors="coerce")
+    fppg=pd.to_numeric(dk["AvgPointsPerGame"],errors="coerce")
+    sal_pct=salary.rank(pct=True)
+    fppg_pct=fppg.rank(pct=True)
+    consensus=(0.55*fppg_pct.fillna(.5)+0.45*sal_pct.fillna(.5))*100
     return pd.DataFrame({
         "Name":dk["Name"],
-        "manual_speed_rating":pd.to_numeric(dk["AvgPointsPerGame"],errors="coerce"),
-        "manual_dnf_risk":np.nan
+        "manual_speed_rating":consensus,
+        "manual_dnf_risk":np.nan,
+        "auto_salary_percentile":sal_pct,
+        "auto_fppg_percentile":fppg_pct,
+        "auto_driver_dna_score":consensus,
+        "driver_dna_source":"DK salary + FPPG baseline"
     })
 
 def final_grid_ready(updates,field_size):
@@ -50,26 +62,36 @@ def final_grid_ready(updates,field_size):
     if set(q.astype(int))!=set(range(1,field_size+1)): return False,f"Starting positions must be 1–{field_size}."
     return True,"Final grid validated."
 
-setup,dna_tab,driver_tab,sim_tab,dfs_tab,audit_tab=st.tabs(
-["⚙️ Setup / Inputs","🧬 Track DNA","🏎️ Driver DNA","🎲 Race Simulations","💰 DFS Builder","📋 Post-Race Audit"])
+setup,dna_tab,driver_tab,live_tab,sim_tab,dfs_tab,audit_tab=st.tabs(
+["⚙️ Setup / Inputs","🧬 Track DNA","🏎️ Driver DNA","📡 Live Update","🎲 Race Simulations","💰 DFS Builder","📋 Post-Race Audit"])
 
 with setup:
     st.subheader("Weekly race setup")
-    left,right=st.columns([1,2])
-    with left:
+    c1,c2=st.columns([1,2])
+    with c1:
         selected_track=st.selectbox("1. Select track",CATALOG["track"].tolist())
     track=CATALOG.loc[CATALOG["track"]==selected_track].copy().reset_index(drop=True)
-    with right:
-        st.write("**Track profile auto-loaded.** You can inspect/edit it on Track DNA; no weekly track CSV is required.")
+    with c2:
+        st.success("Track profile auto-loaded — no weekly track CSV required.")
     dk_raw=csv_upload("2. Upload DraftKings salary CSV","dk")
-    priors_upload=csv_upload("3. Optional enriched driver-priors CSV","priors")
-    updates=csv_upload("4. Practice / qualifying CSV (optional before qualifying; required for final GPP)","updates")
-    st.download_button("Download optional enriched-priors template",(ROOT/"driver_priors_template.csv").read_bytes(),"driver_priors_template.csv")
+    st.info("That's the normal weekly setup: choose the track + upload DraftKings. Driver DNA is constructed automatically and the Saturday update lives on its own page.")
+    with st.expander("Advanced: optional enriched Driver DNA override"):
+        priors_upload=csv_upload("Upload enriched driver-priors CSV","priors")
+        st.caption("Optional only. Use this when you have trusted recent-speed, comparable-track, track-history or laps-led data. Missing fields stay neutral; they are never converted to zero.")
+        st.download_button("Download enriched-priors template",(ROOT/"driver_priors_template.csv").read_bytes(),"driver_priors_template.csv")
+
+with live_tab:
+    st.subheader("Saturday Live Update")
+    st.write("Practice and qualifying belong here—not in weekly setup.")
+    updates=csv_upload("Upload practice / qualifying CSV","updates")
     st.download_button("Download practice/qualifying template",(ROOT/"practice_qualifying_template.csv").read_bytes(),"practice_qualifying_template.csv")
-    st.info("Only the DraftKings file is required to start. If no enriched priors are uploaded, V2.1 builds an honest DK-based baseline and leaves unavailable specialized stats neutral.")
+    if updates is None:
+        st.info("PRE-QUALIFYING MODE — research projections are available, but final GPP export stays locked.")
+    else:
+        st.success(f"Loaded live updates for {len(updates)} drivers. The app will validate the official starting grid before unlocking final GPP builds.")
 
 if dk_raw is None:
-    st.warning("Upload the DraftKings salary CSV to activate the model.")
+    st.warning("Upload the DraftKings salary CSV on Setup / Inputs to activate the model.")
     st.stop()
 
 try:
@@ -83,7 +105,7 @@ if "Name" not in priors.columns:
 
 with st.sidebar:
     st.header(selected_track)
-    mode="AUTO BASELINE" if priors_upload is None else "ENRICHED PRIORS"
+    mode="AUTO DRIVER DNA" if priors_upload is None else "ENRICHED DRIVER DNA"
     st.caption(mode)
     sims=st.selectbox("Race simulations",[10000,25000,50000,100000],index=3)
     seed=st.number_input("Seed",value=42,step=1)
@@ -118,13 +140,27 @@ with dna_tab:
     st.caption("The catalog is a starting profile. We will calibrate these values with post-race audits rather than silently changing them week to week.")
 
 with driver_tab:
-    st.subheader("Driver DNA / track fit")
+    st.subheader("Driver DNA")
     if priors_upload is None:
-        st.warning("AUTO BASELINE mode: specialized track-type/history data was not supplied, so those missing signals are neutral—not zero/bad.")
+        st.success("AUTO DRIVER DNA — built from the DraftKings salary/FPPG baseline plus this track's DNA.")
+        st.caption("Transparency rule: recent speed, comparable-track history, venue history and DNF risk are not invented. Until trusted data is supplied, those components remain neutral and coverage/confidence reflect that.")
+    else:
+        st.success("ENRICHED DRIVER DNA — trusted override data is active.")
     show=["Name","Salary","race_strength","track_dna_fit","dominator_strength","projected_start","data_coverage","model_confidence"]
-    st.dataframe(features[show].sort_values("race_strength",ascending=False),use_container_width=True,hide_index=True)
-    name=st.selectbox("Inspect driver",features["Name"].tolist())
-    st.dataframe(features.loc[features["Name"]==name].T,use_container_width=True)
+    board=features[show].sort_values("race_strength",ascending=False).copy()
+    board.insert(0,"DNA Rank",range(1,len(board)+1))
+    st.dataframe(board,use_container_width=True,hide_index=True)
+    name=st.selectbox("Inspect driver DNA",features["Name"].tolist())
+    r=features.loc[features["Name"]==name].iloc[0]
+    a,b,c,d=st.columns(4)
+    a.metric("Race strength",f"{r.race_strength:.2f}")
+    b.metric("Track DNA fit",f"{r.track_dna_fit:.2f}")
+    c.metric("Dominator strength",f"{r.dominator_strength:.2f}")
+    d.metric("Confidence",f"{r.model_confidence:.0%}")
+    st.markdown("#### Signal audit")
+    audit_cols=[c for c in ["Name","audit_dk_prior","audit_current","audit_track_type","audit_track_history",
+                            "practice_z","projected_start","data_coverage","model_confidence"] if c in features.columns]
+    st.dataframe(features.loc[features["Name"]==name,audit_cols].T,use_container_width=True)
 
 with sim_tab:
     st.subheader("Race simulations")
