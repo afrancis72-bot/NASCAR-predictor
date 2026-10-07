@@ -69,95 +69,169 @@ def _safe_signal(s, higher_is_better=True, min_obs=6, cap=2.25):
     out.loc[obs]=z.clip(-cap,cap)*reliability
     return out
 
+def construct_track_dna(track):
+    """Translate one track-profile row into an explainable race archetype."""
+    w = track.iloc[0]
+    def g(name, default):
+        try:
+            v = getattr(w, name)
+            return float(v) if pd.notna(v) else float(default)
+        except Exception:
+            return float(default)
+
+    length = g("track_length", 1.5)
+    banking = g("banking", 18)
+    tire = g("tire_wear", 0.55)
+    passing = g("passing_difficulty", 0.50)
+    volatility = g("volatility", 0.95)
+    restart = g("restart_volatility", 0.55)
+    pit = g("pit_importance", 0.55)
+
+    if length >= 2.0 and banking >= 25:
+        archetype = "superspeedway"
+    elif length <= 1.1:
+        archetype = "short_track"
+    elif g("road_course", 0) >= 0.5:
+        archetype = "road_course"
+    elif 1.3 <= length <= 1.7:
+        archetype = "intermediate"
+    else:
+        archetype = "oval"
+
+    dna = {
+        "track": str(getattr(w, "track", "Current race")),
+        "archetype": archetype,
+        "long_run_speed": min(1.0, 0.45 + 0.40*tire),
+        "short_run_speed": min(1.0, 0.45 + 0.35*restart),
+        "track_position": min(1.0, 0.35 + 0.45*passing),
+        "place_differential": max(0.20, 0.75 - 0.45*passing),
+        "dominator": min(1.0, 0.45 + 0.25*(1-passing) + 0.20*(1/ max(volatility,0.55))),
+        "pit_execution": min(1.0, 0.30 + 0.55*pit),
+        "incident_variance": min(1.0, 0.35 + 0.35*volatility + 0.20*restart),
+        "tire_management": min(1.0, 0.25 + 0.65*tire),
+    }
+    return dna
+
+
+def _first_signal(df, candidates, higher_better=True, min_obs=6):
+    """Use the first available column from a generic/legacy alias list."""
+    for c in candidates:
+        if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().sum() >= min_obs:
+            return _safe_signal(df[c], higher_better, min_obs=min_obs)
+    return pd.Series(0.0, index=df.index, dtype=float)
+
+
 def build_features(dk, priors, track, updates=None):
+    """
+    V2.0 race-agnostic feature builder.
+    Generic weekly columns are preferred; legacy Las Vegas columns remain aliases
+    so old data can still be inspected without making Las Vegas part of the model.
+    """
     df = dk.copy()
     df = df.merge(priors.drop(columns=["Salary","AvgPointsPerGame"],errors="ignore"), on="Name", how="left")
     if updates is not None:
         df = df.merge(updates, on="Name", how="left")
-    else:
-        for c in ["single_lap_rank","avg5_rank","avg10_rank","avg15_rank","avg20_rank","qualifying_position"]:
+    for c in ["single_lap_rank","avg5_rank","avg10_rank","avg15_rank","avg20_rank","qualifying_position"]:
+        if c not in df.columns:
             df[c] = np.nan
 
-    # Baselines. Missing specialized stats are shrunk to field-neutral, never treated as zero/bad.
+    if "AvgPointsPerGame" not in df.columns:
+        df["AvgPointsPerGame"] = pd.to_numeric(df.get("avg_points", 0), errors="coerce").fillna(0)
+    if "manual_speed_rating" not in df.columns:
+        df["manual_speed_rating"] = np.nan
+
     df["dk_base_z"] = _z(df["AvgPointsPerGame"], True)
-    df["intermediate_z"] = _safe_signal(df.get("intermediate_2026_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["vegas_spring_z"] = _safe_signal(df.get("vegas_spring_2026_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["vegas_hist_z"] = _safe_signal(df.get("vegas_nextgen_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["season_finish_z"] = _safe_signal(df.get("season_2026_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["season_led_z"] = _safe_signal(df.get("season_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["intermediate_led_z"] = _safe_signal(df.get("intermediate_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["vegas_led_z"] = _safe_signal(df.get("vegas_nextgen_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["vegas_spring_led_z"] = _safe_signal(df.get("vegas_spring_2026_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["nextgen_1p5_led_z"] = _safe_signal(df.get("nextgen_1p5_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["season_speed_z"] = _safe_signal(df.get("season_speed_rank", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["chase_rating_z"] = _safe_signal(df.get("chase_driver_rating", pd.Series(np.nan,index=df.index)), True, min_obs=6)
-    df["chase_finish_z"] = _safe_signal(df.get("chase_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["vegas_career_finish_z"] = _safe_signal(df.get("vegas_career_avg_finish", pd.Series(np.nan,index=df.index)), False, min_obs=6)
-    df["vegas_career_led_z"] = _safe_signal(df.get("vegas_career_laps_led", pd.Series(np.nan,index=df.index)), True, min_obs=6)
+    df["season_finish_z"] = _first_signal(df, ["season_avg_finish","season_2026_avg_finish"], False)
+    df["season_led_z"] = _first_signal(df, ["season_laps_led","season_2026_laps_led"], True)
+    df["season_speed_z"] = _first_signal(df, ["season_speed_rank"], False)
+    df["recent_rating_z"] = _first_signal(df, ["recent_driver_rating","chase_driver_rating"], True)
+    df["recent_finish_z"] = _first_signal(df, ["recent_avg_finish","chase_avg_finish"], False)
+
+    df["track_type_finish_z"] = _first_signal(
+        df, ["track_type_avg_finish","intermediate_2026_avg_finish"], False)
+    df["track_type_led_z"] = _first_signal(
+        df, ["track_type_laps_led","intermediate_2026_laps_led","nextgen_1p5_laps_led"], True)
+    df["track_history_finish_z"] = _first_signal(
+        df, ["track_history_avg_finish","vegas_nextgen_avg_finish","vegas_career_avg_finish","vegas_spring_2026_finish"], False)
+    df["track_history_led_z"] = _first_signal(
+        df, ["track_history_laps_led","vegas_nextgen_laps_led","vegas_career_laps_led","vegas_spring_2026_laps_led"], True)
+
     df["manual_speed_z"] = _z(df["manual_speed_rating"], True)
     df["practice_z"] = _rank_signal(df)
 
-    # Blend venue history only where evidence exists; neutral shrinkage elsewhere.
-    # V1.2 reliability-aware layers. Sparse evidence adjusts the broad DK prior,
-    # but no driver is rewarded simply because more columns happen to be populated.
-    vegas = (0.45*df["vegas_spring_z"].clip(-2,2) +
-             0.15*df["vegas_hist_z"].clip(-2,2) +
-             0.15*df["vegas_led_z"].clip(-2,2) +
-             0.15*df["vegas_career_finish_z"].clip(-2,2) +
-             0.10*df["vegas_career_led_z"].clip(-2,2))
-    current = (0.30*df["dk_base_z"].clip(-2,2) +
-               0.30*df["season_finish_z"].clip(-2,2) +
-               0.15*df["season_speed_z"].clip(-2,2) +
-               0.15*df["chase_rating_z"].clip(-2,2) +
-               0.10*df["chase_finish_z"].clip(-2,2))
-    intermediate = (0.55*df["intermediate_z"].clip(-2,2) +
-                    0.15*df["intermediate_led_z"].clip(-2,2) +
-                    0.30*df["nextgen_1p5_led_z"].clip(-2,2))
+    current = (0.32*df["dk_base_z"].clip(-2,2) +
+               0.28*df["season_finish_z"].clip(-2,2) +
+               0.16*df["season_speed_z"].clip(-2,2) +
+               0.14*df["recent_rating_z"].clip(-2,2) +
+               0.10*df["recent_finish_z"].clip(-2,2))
+    track_type = (0.68*df["track_type_finish_z"].clip(-2,2) +
+                  0.32*df["track_type_led_z"].clip(-2,2))
+    track_history = (0.70*df["track_history_finish_z"].clip(-2,2) +
+                     0.30*df["track_history_led_z"].clip(-2,2))
 
-    # Pre-qualifying baseline; practice signal only becomes material when populated.
     practice_available = df[["single_lap_rank","avg5_rank","avg10_rank","avg15_rank","avg20_rank"]].notna().any(axis=1)
     qual_available = df["qualifying_position"].notna()
     qual_z = _z(df["qualifying_position"], False) if qual_available.any() else pd.Series(0.0,index=df.index)
 
     w = track.iloc[0]
-    # V1A calibrated blend: broad prior carries extra weight until full historical ingestion is built.
-    raw = (0.34*current + 0.23*intermediate + 0.15*vegas + 0.28*df["dk_base_z"])
-    # Reallocate unavailable live-data weights to the stable baseline rather than pretending zero.
+    dna = construct_track_dna(track)
+    # Track DNA changes the balance between broad ability, track-type fit and venue history.
+    hist_w = 0.10 + 0.08*dna["track_position"]
+    type_w = 0.20 + 0.10*dna["long_run_speed"]
+    base_w = max(0.35, 1.0-hist_w-type_w)
+    raw = base_w*current + type_w*track_type + hist_w*track_history + 0.10*df["dk_base_z"]
+
+    practice_weight = float(getattr(w,"weight_practice",0.08))
+    qualifying_weight = float(getattr(w,"weight_qualifying",0.06))
     if practice_available.any():
-        raw += w.weight_practice*df["practice_z"]
+        raw += practice_weight*df["practice_z"]
     else:
-        raw += 0.04*(0.50*intermediate + 0.50*current)
+        raw += practice_weight*(0.55*current+0.45*track_type)
     if qual_available.any():
-        raw += w.weight_qualifying*qual_z
+        raw += qualifying_weight*qual_z
     else:
-        raw += 0.03*(0.50*intermediate + 0.50*vegas)
+        raw += qualifying_weight*(0.60*current+0.40*track_history)
 
     df["race_strength"] = raw
     df["track_volatility"] = float(getattr(w, "volatility", 0.95))
     df["projected_start"] = df["qualifying_position"].fillna((len(df)+1)/2)
-    # Dominator score deliberately differs from finish strength.
     start_front = _z(df["projected_start"], False)
+
+    ds = float(getattr(w,"dominator_weight_speed",0.35))
+    dt = float(getattr(w,"dominator_weight_intermediate",0.30))
+    dh = float(getattr(w,"dominator_weight_vegas",0.20))
+    dstart = float(getattr(w,"dominator_weight_start",0.15))
     df["dominator_strength"] = (
-        w.dominator_weight_speed*(0.65*current+0.35*df["practice_z"]) +
-        w.dominator_weight_intermediate*(0.40*intermediate+0.25*df["intermediate_led_z"]+0.35*df["nextgen_1p5_led_z"]) +
-        w.dominator_weight_vegas*(0.25*vegas+0.25*df["season_led_z"]+0.25*df["vegas_led_z"]+0.25*df["vegas_spring_led_z"]) +
-        w.dominator_weight_start*start_front
+        ds*(0.65*current+0.35*df["practice_z"]) +
+        dt*(0.55*track_type+0.45*df["track_type_led_z"]) +
+        dh*(0.55*track_history+0.45*df["season_led_z"]) +
+        dstart*start_front
     )
-    df["place_diff_room"] = df["projected_start"] - 1
-    df["front_start_score"] = ((10 - df["projected_start"]).clip(lower=0) / 9.0)
-    df["back_start_score"] = ((df["projected_start"] - 20).clip(lower=0) / max(len(df)-20,1))
-    # Starting up front modestly increases early dominator access; it does NOT redefine driver ability.
     if qual_available.any():
-        df["dominator_strength"] += 0.22*_z(df["projected_start"], False)
-    evidence_cols=["intermediate_2026_avg_finish","vegas_spring_2026_finish",
-        "season_2026_avg_finish","season_2026_laps_led","nextgen_1p5_laps_led",
-        "season_speed_rank","chase_driver_rating","vegas_career_avg_finish"]
-    df["data_coverage"] = df[evidence_cols].notna().sum(axis=1) + practice_available.astype(int)*2 + qual_available.astype(int)
-    df["model_confidence"] = (0.45 + 0.055*df["data_coverage"]).clip(upper=0.95)
-    df["audit_dk_prior"] = df["dk_base_z"].clip(-2,2)
-    df["audit_vegas"] = vegas
-    df["audit_current"] = current
-    df["audit_intermediate"] = intermediate
+        df["dominator_strength"] += (0.12 + 0.16*dna["track_position"])*start_front
+
+    df["place_diff_room"] = df["projected_start"] - 1
+    df["front_start_score"] = ((10-df["projected_start"]).clip(lower=0)/9.0)
+    df["back_start_score"] = ((df["projected_start"]-20).clip(lower=0)/max(len(df)-20,1))
+
+    evidence = [
+        "season_avg_finish","season_2026_avg_finish","season_laps_led","season_2026_laps_led",
+        "season_speed_rank","recent_driver_rating","chase_driver_rating","track_type_avg_finish",
+        "intermediate_2026_avg_finish","track_history_avg_finish","vegas_nextgen_avg_finish"
+    ]
+    present=[c for c in evidence if c in df.columns]
+    base_cov=df[present].notna().sum(axis=1) if present else pd.Series(0,index=df.index)
+    df["data_coverage"]=base_cov + practice_available.astype(int)*2 + qual_available.astype(int)
+    df["model_confidence"]=(0.45+0.045*df["data_coverage"]).clip(upper=0.95)
+
+    df["audit_dk_prior"]=df["dk_base_z"].clip(-2,2)
+    df["audit_track_history"]=track_history
+    df["audit_current"]=current
+    df["audit_track_type"]=track_type
+    # Legacy aliases retained only for older UI/code compatibility.
+    df["audit_vegas"]=track_history
+    df["audit_intermediate"]=track_type
+    df["track_dna_fit"]=(0.45*track_type + 0.25*track_history + 0.30*current)
     return df
 
 def simulate(features, config=Config()):
@@ -213,7 +287,14 @@ def simulate(features, config=Config()):
                     "front_start_score","back_start_score","audit_dk_prior","audit_vegas","audit_current","audit_intermediate"]].copy()
     out["proj_dk"] = dkpts.mean(axis=0)
     out["floor_p20"] = np.quantile(dkpts,0.20,axis=0)
+    out["median_p50"] = np.quantile(dkpts,0.50,axis=0)
     out["ceiling_p90"] = np.quantile(dkpts,0.90,axis=0)
+    out["ceiling_p95"] = np.quantile(dkpts,0.95,axis=0)
+    out["ceiling_p99"] = np.quantile(dkpts,0.99,axis=0)
+    top6 = np.argsort(dkpts,axis=1)[:,-min(6,n):]
+    top6_hits = np.zeros(n,dtype=float)
+    for j in range(n): top6_hits[j] = np.mean(np.any(top6==j,axis=1))
+    out["sim_top6_pct"] = top6_hits
     out["win_pct"] = (finish==1).mean(axis=0)
     out["top5_pct"] = (finish<=5).mean(axis=0)
     out["top10_pct"] = (finish<=10).mean(axis=0)
