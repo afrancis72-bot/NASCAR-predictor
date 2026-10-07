@@ -4,6 +4,7 @@ import numpy as np
 import streamlit as st
 from nascar_auto_intelligence import build_auto_intelligence
 from source_diagnostic import run_source_diagnostic
+from nascar_reference_dna import build_reference_dna, blend_driver_dna
 from nascar_predictor_pro import (
     Config, build_features, simulate, optimize_lineups, portfolio_exposure,
     optimize_scenario_portfolio, scenario_summary, construct_track_dna
@@ -11,9 +12,9 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.4",layout="wide")
-st.title("🏁 NASCAR Predictor V2.4")
-st.caption("Select Track → Upload DK → NASCAR Intelligence → Driver DNA → Live Update → 100K Sims → DFS")
+st.set_page_config(page_title="NASCAR Predictor V2.5",layout="wide")
+st.title("🏁 NASCAR Predictor V2.5")
+st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
     f=st.file_uploader(label,type="csv",key=key)
@@ -54,6 +55,12 @@ def auto_priors_from_dk(dk):
         "auto_driver_dna_score":consensus,
         "driver_dna_source":"DK salary + FPPG baseline"
     })
+
+@st.cache_data(ttl=21600,show_spinner=False)
+def cached_reference_dna(dk_records,selected_track):
+    dk_frame=pd.DataFrame(dk_records)
+    ref=build_reference_dna(dk_frame,selected_track)
+    return ref,blend_driver_dna(dk_frame,ref)
 
 @st.cache_data(ttl=21600,show_spinner=False)
 def cached_auto_intelligence(dk_records,selected_track):
@@ -127,13 +134,20 @@ except Exception as e:
     st.error(str(e)); st.stop()
 
 baseline=auto_priors_from_dk(dk)
-with st.spinner("Building Driver DNA from official NASCAR data..."):
+with st.spinner("Building Driver DNA from NASCAR Reference..."):
     try:
-        official_intel,intel_status=cached_auto_intelligence(dk.to_dict("records"),selected_track)
+        reference_raw,reference_dna=cached_reference_dna(dk.to_dict("records"),selected_track)
+        ok=int(reference_raw["reference_ok"].sum())
+        intel_status=f"NASCAR Reference loaded for {ok}/{len(reference_raw)} DK drivers."
     except Exception as e:
-        official_intel=pd.DataFrame({"Name":dk["Name"]})
-        intel_status=f"Automatic NASCAR data unavailable: {e}"
-priors=baseline.merge(official_intel,on="Name",how="left")
+        reference_raw=pd.DataFrame({"Name":dk["Name"]})
+        reference_dna=pd.DataFrame({"Name":dk["Name"]})
+        intel_status=f"NASCAR Reference unavailable: {e}"
+priors=baseline.merge(reference_dna.drop(columns=["Salary","AvgPointsPerGame"],errors="ignore"),on="Name",how="left")
+# Map observed Reference fields into engine-compatible aliases. Missing remains NaN/neutral.
+if "recent_avg_finish" in priors.columns: priors["recent_avg_finish"]=priors["recent_avg_finish"]
+if "track_history_avg_finish" in priors.columns: priors["track_history_avg_finish"]=priors["track_history_avg_finish"]
+if "track_history_laps_led" in priors.columns: priors["track_history_laps_led"]=priors["track_history_laps_led"]
 if priors_upload is not None:
     if "Name" not in priors_upload.columns:
         st.error("Optional priors file must contain Name."); st.stop()
@@ -146,7 +160,7 @@ if priors_upload is not None:
 
 with st.sidebar:
     st.header(selected_track)
-    mode="AUTO NASCAR INTELLIGENCE" if priors_upload is None else "AUTO + MANUAL OVERRIDE"
+    mode="NASCAR REFERENCE DNA" if priors_upload is None else "REFERENCE + MANUAL OVERRIDE"
     st.caption(mode)
     sims=st.selectbox("Race simulations",[10000,25000,50000,100000],index=3)
     seed=st.number_input("Seed",value=42,step=1)
@@ -183,18 +197,25 @@ with dna_tab:
 with driver_tab:
     st.subheader("Driver DNA")
     if "loaded" in intel_status.lower():
-        st.success("AUTOMATED NASCAR INTELLIGENCE — "+intel_status)
+        st.success("NASCAR REFERENCE DRIVER DNA — "+intel_status)
     else:
         st.warning(intel_status+" DK baseline remains active; missing web data is neutral.")
     if priors_upload is None:
-        st.success("AUTO DRIVER DNA — official NASCAR season/race-history signals are layered over the DK baseline and Track DNA when available.")
-        st.caption("Transparency rule: only fields actually returned by NASCAR.com are scored. Missing recent/track/reliability fields remain neutral; DK remains the fallback baseline.")
+        st.success("AUTO DRIVER DNA — NASCAR Reference recent form and track-history signals are blended with the DK market baseline and Track DNA.")
+        st.caption("Transparency rule: missing NASCAR Reference components are omitted and the remaining weights renormalize. Missing data never scores as zero.")
     else:
         st.success("ENRICHED DRIVER DNA — trusted override data is active.")
     show=["Name","Salary","race_strength","track_dna_fit","dominator_strength","projected_start","data_coverage","model_confidence"]
     board=features[show].sort_values("race_strength",ascending=False).copy()
+    if updates is None and "projected_start" in board.columns:
+        board["projected_start"]="PRE-QUAL"
     board.insert(0,"DNA Rank",range(1,len(board)+1))
     st.dataframe(board,use_container_width=True,hide_index=True)
+    st.markdown("#### Driver DNA components")
+    dna_cols=["Name","driver_dna_score","recent_form_score","place_diff_score","track_fit_score","dominator_score","reliability_score","dk_market_score","data_coverage_pct","model_confidence"]
+    available=[c for c in dna_cols if c in reference_dna.columns]
+    if available:
+        st.dataframe(reference_dna[available].sort_values("driver_dna_score",ascending=False),use_container_width=True,hide_index=True)
     name=st.selectbox("Inspect driver DNA",features["Name"].tolist())
     r=features.loc[features["Name"]==name].iloc[0]
     a,b,c,d=st.columns(4)
@@ -203,7 +224,7 @@ with driver_tab:
     c.metric("Dominator strength",f"{r.dominator_strength:.2f}")
     d.metric("Confidence",f"{r.model_confidence:.0%}")
     with st.expander("Automated NASCAR data for this driver"):
-        st.dataframe(priors.loc[priors["Name"]==name].T,use_container_width=True)
+        st.dataframe(reference_dna.loc[reference_dna["Name"]==name].T,use_container_width=True)
     st.markdown("#### Signal audit")
     audit_cols=[c for c in ["Name","audit_dk_prior","audit_current","audit_track_type","audit_track_history",
                             "practice_z","projected_start","data_coverage","model_confidence"] if c in features.columns]
