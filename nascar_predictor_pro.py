@@ -159,13 +159,30 @@ def build_features(dk, priors, track, updates=None):
     df["manual_speed_z"] = _z(df["manual_speed_rating"], True)
     df["practice_z"] = _rank_signal(df)
 
-    current = (0.32*df["dk_base_z"].clip(-2,2) +
-               0.28*df["season_finish_z"].clip(-2,2) +
-               0.16*df["season_speed_z"].clip(-2,2) +
-               0.14*df["recent_rating_z"].clip(-2,2) +
-               0.10*df["recent_finish_z"].clip(-2,2))
-    track_type = (0.68*df["track_type_finish_z"].clip(-2,2) +
-                  0.32*df["track_type_led_z"].clip(-2,2))
+    # V2.9: NASCAR Reference DNA is now upstream of the race model, not display-only.
+    # Component scores are cross-field percentiles (0-100), converted to z-scores.
+    df["reference_dna_z"] = _first_signal(df, ["driver_dna_score"], True)
+    df["reference_form_z"] = _first_signal(df, ["recent_form_score"], True)
+    df["reference_pd_z"] = _first_signal(df, ["place_diff_score"], True)
+    df["reference_track_z"] = _first_signal(df, ["comparable_track_score"], True)
+    df["reference_elo_z"] = _first_signal(df, ["track_type_elo_score"], True)
+    df["reference_reliability_z"] = _first_signal(df, ["reliability_score"], True)
+
+    # Broad race strength: current-season results + recent form + reliability + DK prior.
+    # Missing Reference signals are neutral (0 z), never converted to poor performance.
+    current = (0.22*df["dk_base_z"].clip(-2,2) +
+               0.26*df["season_finish_z"].clip(-2,2) +
+               0.22*df["recent_finish_z"].clip(-2,2) +
+               0.16*df["reference_form_z"].clip(-2,2) +
+               0.08*df["reference_reliability_z"].clip(-2,2) +
+               0.06*df["reference_pd_z"].clip(-2,2))
+
+    # Track-type fit is explicitly driven by comparable-track average finish and
+    # track-type Elo. Legacy laps-led inputs can supplement when a trusted file exists.
+    track_type = (0.48*df["track_type_finish_z"].clip(-2,2) +
+                  0.27*df["reference_track_z"].clip(-2,2) +
+                  0.20*df["reference_elo_z"].clip(-2,2) +
+                  0.05*df["track_type_led_z"].clip(-2,2))
     track_history = (0.70*df["track_history_finish_z"].clip(-2,2) +
                      0.30*df["track_history_led_z"].clip(-2,2))
 
@@ -228,6 +245,12 @@ def build_features(dk, priors, track, updates=None):
     df["audit_track_history"]=track_history
     df["audit_current"]=current
     df["audit_track_type"]=track_type
+    df["audit_reference_dna"]=df["reference_dna_z"]
+    df["audit_reference_form"]=df["reference_form_z"]
+    df["audit_reference_pd"]=df["reference_pd_z"]
+    df["audit_reference_track"]=df["reference_track_z"]
+    df["audit_reference_elo"]=df["reference_elo_z"]
+    df["audit_reference_reliability"]=df["reference_reliability_z"]
     # Legacy aliases retained only for older UI/code compatibility.
     df["audit_vegas"]=track_history
     df["audit_intermediate"]=track_type
@@ -284,7 +307,9 @@ def simulate(features, config=Config()):
 
     out = features[["Name","ID","Salary","AvgPointsPerGame","race_strength","dominator_strength",
                     "data_coverage","model_confidence","projected_start","place_diff_room",
-                    "front_start_score","back_start_score","audit_dk_prior","audit_vegas","audit_current","audit_intermediate"]].copy()
+                    "front_start_score","back_start_score","audit_dk_prior","audit_vegas","audit_current","audit_intermediate",
+                    "audit_reference_dna","audit_reference_form","audit_reference_pd","audit_reference_track",
+                    "audit_reference_elo","audit_reference_reliability"]].copy()
     out["proj_dk"] = dkpts.mean(axis=0)
     out["floor_p20"] = np.quantile(dkpts,0.20,axis=0)
     out["median_p50"] = np.quantile(dkpts,0.50,axis=0)

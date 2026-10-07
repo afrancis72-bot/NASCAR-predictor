@@ -130,6 +130,16 @@ def parse_profile_text(html):
     # First Superspeedway occurrence after NR-Rating is the track-type Elo.
     m=re.search(r"(?:^|\|)\s*(\d{3,4})\s*\|\s*Superspeedway(?:\s*\||$)",elo,re.I)
     if m: out["superspeedway_elo"]=float(m.group(1))
+
+    # Advanced Metrics are rendered as "Label | value | confidence..." in page text.
+    adv=_between(txt,"Advanced Metrics","Career History")
+    def metric_after_label(label):
+        m=re.search(rf"{re.escape(label)}\s*\|\s*([-+]?\d+(?:\.\d+)?)",adv,re.I)
+        return float(m.group(1)) if m else np.nan
+    out["reference_reliability"]=metric_after_label("Reliability")
+    out["pit_stop_quality"]=metric_after_label("Pit Stop Quality")
+    out["tire_management"]=metric_after_label("Tire Management")
+    out["late_race_performance"]=metric_after_label("Late-Race Performance")
     return out
 
 def build_reference_dna(dk, selected_track):
@@ -158,8 +168,11 @@ def build_reference_dna(dk, selected_track):
     x["comparable_track_score"]=_pct_score(x["comparable_track_avg_finish"],invert=True)
     x["track_type_elo_score"]=_pct_score(x["superspeedway_elo"]) if atl else np.nan
 
-    # Reliability = consistency proxy using season avg finish + last-5/current form.
-    x["reliability_score"]=x[["season_finish_score","recent_finish_score"]].mean(axis=1,skipna=True)
+    # Prefer NASCAR Reference's own Reliability metric when present.
+    # Fall back to finish consistency rather than inventing a value.
+    source_rel=_pct_score(x["reference_reliability"]) if "reference_reliability" in x.columns else pd.Series(np.nan,index=x.index)
+    fallback_rel=x[["season_finish_score","recent_finish_score"]].mean(axis=1,skipna=True)
+    x["reliability_score"]=source_rel.combine_first(fallback_rel)
 
     comps=["recent_form_score","place_diff_score","comparable_track_score","track_type_elo_score","reliability_score"]
     x["reference_components_available"]=x[comps].notna().sum(axis=1)

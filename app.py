@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.8",layout="wide")
-st.title("🏁 NASCAR Predictor V2.8")
+st.set_page_config(page_title="NASCAR Predictor V2.9",layout="wide")
+st.title("🏁 NASCAR Predictor V2.9")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
@@ -144,23 +144,20 @@ with st.spinner("Building Driver DNA from NASCAR Reference..."):
         reference_dna=pd.DataFrame({"Name":dk["Name"]})
         intel_status=f"NASCAR Reference unavailable: {e}"
 priors=baseline.merge(reference_dna.drop(columns=["Salary","AvgPointsPerGame"],errors="ignore"),on="Name",how="left")
-# Map observed Reference fields into engine-compatible aliases. Missing remains NaN/neutral.
-if "recent_avg_finish" in priors.columns: priors["recent_avg_finish"]=priors["recent_avg_finish"]
-if "track_history_avg_finish" in priors.columns: priors["track_history_avg_finish"]=priors["track_history_avg_finish"]
-if "track_history_laps_led" in priors.columns: priors["track_history_laps_led"]=priors["track_history_laps_led"]
+# V2.9 integration map: NASCAR Reference fields become generic engine inputs.
+# Missing values remain NaN/neutral. Atlanta uses modern superspeedway-style comparable data.
+if "comparable_track_avg_finish" in priors.columns:
+    priors["track_type_avg_finish"]=pd.to_numeric(priors["comparable_track_avg_finish"],errors="coerce")
+# season_avg_finish and recent_avg_finish already use the engine's generic names.
 with extract_tab:
     st.subheader("NASCAR Reference — Extraction Diagnostic")
-    st.write("This page shows the raw tables returned for one driver and the exact values V2.8 extracted. It does not alter the model.")
+    st.write("This page shows the raw tables returned for one driver and the exact values V2.9 extracted. It does not alter the model.")
     inspect_name=st.selectbox("Driver to inspect",dk["Name"].tolist(),key="extract_driver")
-    extracted=reference_raw.loc[reference_raw["Name"]==inspect_name].copy()
-    if len(extracted):
-        st.markdown("#### Extracted raw values")
-        st.dataframe(extracted.T,use_container_width=True)
-    if st.button("Inspect raw NASCAR Reference tables"):
+    if st.button("Inspect NASCAR Reference extraction"):
         try:
             html=driver_page(inspect_name)
             parsed=parse_profile_text(html)
-            st.markdown("#### V2.8 text-parser output")
+            st.markdown("#### V2.9 text-parser output")
             _diag={k:v for k,v in parsed.items() if k!="recent_rows"}
             st.dataframe(pd.DataFrame({"metric":list(_diag.keys()),"value":list(_diag.values())}),use_container_width=True,hide_index=True)
             if parsed.get("recent_rows"):
@@ -262,6 +259,15 @@ with driver_tab:
     available=[c for c in dna_cols if c in reference_dna.columns]
     if available:
         st.dataframe(reference_dna[available].sort_values("driver_dna_score",ascending=False),use_container_width=True,hide_index=True)
+
+    st.markdown("#### Model integration audit")
+    st.caption("These are the normalized NASCAR Reference signals actually entering race strength / Track DNA fit. Non-zero spread confirms the source is influencing simulations.")
+    integration_cols=["Name","audit_reference_form","audit_reference_pd","audit_reference_track",
+                      "audit_reference_elo","audit_reference_reliability","audit_current",
+                      "audit_track_type","race_strength","track_dna_fit","dominator_strength"]
+    integration_cols=[c for c in integration_cols if c in features.columns]
+    st.dataframe(features[integration_cols].sort_values("race_strength",ascending=False),
+                 use_container_width=True,hide_index=True)
     name=st.selectbox("Inspect driver DNA",features["Name"].tolist())
     r=features.loc[features["Name"]==name].iloc[0]
     a,b,c,d=st.columns(4)
@@ -272,8 +278,10 @@ with driver_tab:
     with st.expander("Automated NASCAR data for this driver"):
         st.dataframe(reference_dna.loc[reference_dna["Name"]==name].T,use_container_width=True)
     st.markdown("#### Signal audit")
-    audit_cols=[c for c in ["Name","audit_dk_prior","audit_current","audit_track_type","audit_track_history",
-                            "practice_z","projected_start","data_coverage","model_confidence"] if c in features.columns]
+    audit_cols=[c for c in ["Name","audit_dk_prior","audit_reference_form","audit_reference_pd",
+                            "audit_reference_track","audit_reference_elo","audit_reference_reliability",
+                            "audit_current","audit_track_type","audit_track_history","practice_z",
+                            "projected_start","data_coverage","model_confidence"] if c in features.columns]
     st.dataframe(features.loc[features["Name"]==name,audit_cols].T,use_container_width=True)
 
 coverage_ready = ("data_coverage_pct" in reference_dna.columns and reference_dna["data_coverage_pct"].median() >= 55)
