@@ -12,8 +12,8 @@ from nascar_predictor_pro import (
 
 ROOT=Path(__file__).resolve().parent
 CATALOG=pd.read_csv(ROOT/"track_catalog.csv")
-st.set_page_config(page_title="NASCAR Predictor V2.11",layout="wide")
-st.title("🏁 NASCAR Predictor V2.11")
+st.set_page_config(page_title="NASCAR Predictor V2.13",layout="wide")
+st.title("🏁 NASCAR Predictor V2.13")
 st.caption("Select Track → Upload DK → NASCAR Reference DNA → Live Update → 100K Sims → DFS")
 
 def csv_upload(label,key):
