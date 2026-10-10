@@ -288,6 +288,18 @@ def simulate(features, config=Config()):
     strength = features["race_strength"].to_numpy(float)
     dom = features["dominator_strength"].to_numpy(float)
     starts = features["projected_start"].to_numpy(float)
+
+    # V2.14 confidence calibration: low-coverage drivers previously received extra
+    # variance without enough shrinkage of their underlying strength. For deep
+    # starters that could manufacture unrealistic PD/ceiling tails. Blend uncertain
+    # strength toward the observable DK-market prior and shrink dominator strength
+    # toward that conservative race-strength estimate. High-confidence drivers are
+    # effectively unchanged.
+    confidence = pd.to_numeric(features.get("model_confidence", 0.45), errors="coerce").fillna(0.45).clip(0.35,0.95).to_numpy(float)
+    dk_anchor = pd.to_numeric(features.get("audit_dk_prior", 0.0), errors="coerce").fillna(0.0).clip(-2.5,2.5).to_numpy(float)
+    shrink = np.clip((0.80-confidence)/0.45, 0.0, 1.0)
+    strength = (1.0-0.55*shrink)*strength + (0.55*shrink)*dk_anchor
+    dom = (1.0-0.65*shrink)*dom + (0.65*shrink)*np.minimum(strength, dom)
     dnf = pd.to_numeric(features.get("manual_dnf_risk", pd.Series(np.nan,index=features.index)), errors="coerce").fillna(0.11).clip(0.02,0.35).to_numpy()
 
     finish = np.empty((sims,n), dtype=np.int16)
@@ -297,7 +309,9 @@ def simulate(features, config=Config()):
 
     # Simulation: latent performance + incident tail. V1 intentionally transparent.
     for s in range(sims):
-        sigma = 1.85 - 0.65*features["model_confidence"].to_numpy(float)
+        # Keep uncertainty for thin-data drivers, but cap the variance bonus so
+        # uncertainty does not itself become a DFS ceiling advantage.
+        sigma = np.minimum(1.85 - 0.65*confidence, 1.48)
         # V1.4.1: modest track-position anchor. Starting position is predictive of finish,
         # so front starters retain some track-position value and deep starters must earn PD.
         # This changes finish probabilities, not DraftKings scoring.
@@ -364,12 +378,22 @@ def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_ov
     sal = proj["Salary"].to_numpy(float)
     n=len(proj); lineups=[]
     max_count=max(1, int(np.floor(n_lineups*max_exposure + 1e-9)))
+    # V2.14: driver-specific exposure protection for thin/low-confidence data.
+    # User max exposure remains the absolute ceiling; uncertain drivers get a
+    # lower cap automatically instead of being allowed to hit that ceiling.
+    conf=pd.to_numeric(proj.get("model_confidence", pd.Series(0.90,index=proj.index)),errors="coerce").fillna(0.45).to_numpy(float)
+    cov=pd.to_numeric(proj.get("data_coverage", pd.Series(1.0,index=proj.index)),errors="coerce").fillna(0.15).to_numpy(float)
+    driver_caps=np.full(n,max_count,dtype=int)
+    low=(conf<0.55)|(cov<0.35)
+    med=((conf<0.75)|(cov<0.60)) & ~low
+    driver_caps[low]=np.minimum(driver_caps[low],max(1,int(np.floor(n_lineups*0.30+1e-9))))
+    driver_caps[med]=np.minimum(driver_caps[med],max(1,int(np.floor(n_lineups*0.45+1e-9))))
     exposure_counts=np.zeros(n,dtype=int)
     constraints=[LinearConstraint(np.ones((1,n)),[roster_size],[roster_size]),
                  LinearConstraint(sal.reshape(1,-1),[-np.inf],[salary_cap])]
     for _ in range(n_lineups):
         cons=list(constraints)
-        capped=np.where(exposure_counts>=max_count)[0]
+        capped=np.where(exposure_counts>=driver_caps)[0]
         for i in capped:
             a=np.zeros(n); a[i]=1
             cons.append(LinearConstraint(a.reshape(1,-1),[0],[0]))
@@ -580,6 +604,13 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
 
     overall=0.30*z(mean)+0.25*z(p90)+0.20*z(p95)+0.25*scenario_component
 
+    # V2.14 viability gate: diversification may choose a different race story,
+    # but not a lineup whose simulated quality is far below the candidate bank.
+    raw_gpp=0.40*mean+0.25*p90+0.35*p95
+    mean_floor=0.82*float(np.max(mean))
+    gpp_floor=0.85*float(np.max(raw_gpp))
+    viable=(mean>=mean_floor) & (raw_gpp>=gpp_floor)
+
     # Driver-specific dominator tails for portfolio coverage. These are not
     # projection boosts: they score a lineup only inside simulated races where
     # that pre-race dominator candidate reaches his own upper tail.
@@ -595,6 +626,13 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
     # portfolio, then locally upgrades lineups with stronger scenario candidates
     # while preserving the hard exposure and pairwise-overlap constraints.
     max_count=max(1, int(np.floor(n_lineups*max_exposure + 1e-9)))
+    conf=pd.to_numeric(features.get("model_confidence", pd.Series(0.90,index=features.index)),errors="coerce").fillna(0.45).to_numpy(float)
+    cov=pd.to_numeric(features.get("data_coverage", pd.Series(1.0,index=features.index)),errors="coerce").fillna(0.15).to_numpy(float)
+    driver_caps=np.full(len(features),max_count,dtype=int)
+    low=(conf<0.55)|(cov<0.35)
+    med=((conf<0.75)|(cov<0.60)) & ~low
+    driver_caps[low]=np.minimum(driver_caps[low],max(1,int(np.floor(n_lineups*0.30+1e-9))))
+    driver_caps[med]=np.minimum(driver_caps[med],max(1,int(np.floor(n_lineups*0.45+1e-9))))
     cand_sets=[set(x.tolist()) for x in idxs]
     driver_tuple_to_j={tuple(sorted(x.tolist())):j for j,x in enumerate(idxs)}
     seed_idxs, _seed_valid=_candidate_lineup_matrix(seed_port,features)
@@ -605,6 +643,19 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
     if len(chosen)<n_lineups:
         raise RuntimeError(f"Could not seed {n_lineups} legal lineups under max exposure {max_exposure:.0%} and max overlap {max_overlap}.")
     chosen=chosen[:n_lineups]
+    # Replace non-viable seed/fallback builds before scenario optimization.
+    for pos in range(n_lineups):
+        if viable[chosen[pos]]: continue
+        for j in [int(x) for x in np.argsort(overall)[::-1] if viable[int(x)]]:
+            if j in chosen: continue
+            trial=chosen.copy(); trial[pos]=j
+            # temporary legality check inline because legal_portfolio is defined below
+            sets=[cand_sets[x] for x in trial]
+            counts=np.zeros(len(features),dtype=int)
+            for ss in sets: counts[list(ss)]+=1
+            if np.any(counts>driver_caps): continue
+            if any(len(sets[a]&sets[b])>max_overlap for a in range(len(sets)) for b in range(a)): continue
+            chosen=trial; break
 
     # Portfolio-level dominator coverage. In multi-entry GPP play, a plausible
     # front-running car should not be allowed to disappear solely because its
@@ -615,10 +666,11 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
     coverage_drivers=list(dom_order[:min(6,len(dom_order))]) if n_lineups>=10 else []
 
     def legal_portfolio(js, require_coverage=False):
+        if any(not viable[int(j)] for j in js): return False
         counts=np.zeros(len(features),dtype=int)
         sets=[cand_sets[j] for j in js]
         for ss in sets: counts[list(ss)]+=1
-        if counts.max()>max_count: return False
+        if np.any(counts>driver_caps): return False
         for a in range(len(sets)):
             for b in range(a):
                 if len(sets[a] & sets[b])>max_overlap: return False
@@ -629,7 +681,9 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
 
     # Coordinate-ascent replacements: scenario score improves only when all
     # portfolio risk constraints remain satisfied.
-    order=list(np.argsort(overall)[::-1])
+    order=[int(j) for j in np.argsort(overall)[::-1] if viable[int(j)]]
+    if not order:
+        order=list(np.argsort(overall)[::-1])
     improved=True; passes=0
     while improved and passes<3:
         improved=False; passes+=1
@@ -702,9 +756,13 @@ def optimize_scenario_portfolio(features, sim_matrix, n_lineups=10, salary_cap=5
         r=base.iloc[valid[j]].copy()
         r["Lineup"]=rank
         r["Mean"]=round(float(mean[j]),2)
+        r["P10"]=round(float(np.quantile(scores[:,j],.10)),2)
         r["P90"]=round(float(p90[j]),2)
         r["P95"]=round(float(p95[j]),2)
+        r["GPP_Score"]=round(float(raw_gpp[j]),2)
         r["ScenarioScore"]=round(float(scenario_component[j]),3)
+        r["ViabilityMeanFloor"]=round(float(mean_floor),2)
+        r["ViabilityGPPFloor"]=round(float(gpp_floor),2)
         for s in scripts:
             r[s+"_P90"]=round(float(script_scores[s][j]),2)
         rows.append(r)
