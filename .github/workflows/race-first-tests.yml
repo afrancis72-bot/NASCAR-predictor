@@ -16,6 +16,8 @@ jobs:
       - run: python -m unittest discover -s tests -v
 
       - name: Fetch historical Cup results
-        run: curl --fail --location --retry 3 --max-time 90 https://nascar.kylegrealis.com/cup_series.csv -o cup_series.csv
+        run: curl --fail --location --retry 3 --max-time 90 https://raw.githubusercontent.com/johnschwenck/nascar_analysis/main/data/cup_race_results_2014_2024.csv -o cup_race_results_2014_2024.csv
+      - name: Normalize historical results
+        run: python convert_historical_source.py
       - name: Historical rolling-origin benchmark
-        run: python historical_backtest.py --season 2025 --races 8 --sims 1200
+        run: python historical_backtest.py --season 2024 --races 8 --sims 1200
