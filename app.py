@@ -66,6 +66,18 @@ def cached_reference_dna(dk_records,selected_track):
 def cached_auto_intelligence(dk_records,selected_track):
     return build_auto_intelligence(pd.DataFrame(dk_records),selected_track)
 
+def starting_grid_from_dk(dk):
+    """Use the DK Starting column only when it is a complete unique grid."""
+    if "Starting" not in dk.columns:
+        return None, "DraftKings file has no Starting column."
+    q=pd.to_numeric(dk["Starting"],errors="coerce")
+    n=len(dk)
+    if q.isna().any() or not q.between(1,n).all() or q.nunique()!=n or set(q.astype(int))!=set(range(1,n+1)):
+        return None, "DraftKings Starting is incomplete or contains duplicates; use a verified qualifying CSV."
+    if dk["Name"].isna().any() or dk["Name"].duplicated().any():
+        return None, "DraftKings driver names are missing or duplicated."
+    return pd.DataFrame({"Name":dk["Name"].values,"qualifying_position":q.astype(int).values}), "Validated DraftKings starting grid."
+
 def final_grid_ready(updates,field_size):
     if updates is None or not {"Name","qualifying_position"}.issubset(updates.columns):
         return False,"Official qualifying grid not loaded."
@@ -214,6 +226,37 @@ with st.sidebar:
     salary_cap=st.number_input("Salary cap",45000,50000,50000,100)
     objective=st.selectbox("Build style",["ceiling","median","value"])
 
+# Accept a complete DraftKings starting grid as the default qualifying source.
+# Optional practice upload enriches it; any conflicting qualifying values block exports.
+dk_grid,dk_grid_message=starting_grid_from_dk(dk)
+if dk_grid is not None:
+    if updates is None:
+        updates=dk_grid
+        st.success("Complete qualifying grid loaded automatically from DraftKings Starting.")
+    else:
+        updates=updates.copy()
+        if "Name" not in updates.columns or updates["Name"].duplicated().any():
+            st.error("Practice/qualifying update must contain unique driver names.")
+            st.stop()
+        unknown=set(updates["Name"].dropna())-set(dk_grid["Name"])
+        if unknown:
+            st.error(f"Practice update contains {len(unknown)} names not in the DraftKings field.")
+            st.stop()
+        checked=updates.merge(dk_grid,on="Name",how="right",suffixes=("","_dk"),validate="one_to_one")
+        if "qualifying_position" in checked.columns:
+            manual=pd.to_numeric(checked["qualifying_position"],errors="coerce")
+            conflict=manual.notna() & (manual!=checked["qualifying_position_dk"])
+            if conflict.any():
+                st.error("Uploaded qualifying positions conflict with DraftKings Starting. Confirm the final grid before running.")
+                st.stop()
+            checked["qualifying_position"]=checked["qualifying_position_dk"]
+            checked=checked.drop(columns=["qualifying_position_dk"])
+        else:
+            checked=checked.rename(columns={"qualifying_position_dk":"qualifying_position"})
+        updates=checked
+        st.success("Practice data merged with the validated DraftKings starting grid.")
+else:
+    st.info(dk_grid_message)
 grid_ready,grid_message=final_grid_ready(updates,len(dk))
 # V2.11 PIPELINE TRACE — checkpoint 2, exactly what is handed to build_features().
 _trace_cols=[
