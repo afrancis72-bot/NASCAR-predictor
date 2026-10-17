@@ -14,3 +14,8 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+
+      - name: Fetch historical Cup results
+        run: curl --fail --location --retry 3 --max-time 90 https://nascar.kylegrealis.com/cup_series.csv -o cup_series.csv
+      - name: Historical rolling-origin benchmark
+        run: python historical_backtest.py --season 2025 --races 8 --sims 1200
