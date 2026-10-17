@@ -1,0 +1,23 @@
+name: NASCAR race-first tests
+on:
+  push:
+    branches: [feature/race-first-simulation-v215]
+  pull_request:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+
+      - name: Fetch historical Cup results
+        run: curl --fail --location --retry 3 --max-time 90 https://raw.githubusercontent.com/johnschwenck/nascar_analysis/main/data/cup_race_results_2014_2024.csv -o cup_race_results_2014_2024.csv
+      - name: Normalize historical results
+        run: python convert_historical_source.py
+      - name: Historical rolling-origin benchmark
+        run: python historical_backtest.py --season 2024 --races 8 --sims 1200

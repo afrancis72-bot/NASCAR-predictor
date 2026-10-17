@@ -777,3 +777,7 @@ def scenario_summary(features, sim_matrix):
         "Race script":order,
         "Simulation probability":[float(np.mean(labels==s)) for s in order]
     })
+
+
+# V2.15: race outcomes drive all DFS projections; retain V2.14 optimizer API.
+from nascar_race_engine import simulate
