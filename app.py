@@ -294,7 +294,7 @@ _comparable_values = (pd.to_numeric(reference_dna["comparable_track_avg_finish"]
                       if "comparable_track_avg_finish" in reference_dna.columns
                       else pd.Series(dtype=float))
 _comparable_count = int(_comparable_values.notna().sum())
-_min_comparable_count = max(6, int(np.ceil(len(dk)*0.20)))
+_min_comparable_count = max(6, int(np.ceil(len(dk)*0.50)))
 _reference_track_ready = _comparable_count >= _min_comparable_count
 _ready_for_race_export = _reference_integration_ok and _reference_track_ready
 # V2.8: Reference DNA is authoritative for coverage/confidence.
