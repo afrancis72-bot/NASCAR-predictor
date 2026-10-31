@@ -366,7 +366,18 @@ def simulate(features, config=Config()):
     out["exp_laps_led"] = laps_led.mean(axis=0)
     out["exp_fastest_laps"] = fastest.mean(axis=0)
     out["value_per_1k"] = out["proj_dk"]/(out["Salary"]/1000)
-    return out.sort_values("proj_dk",ascending=False).reset_index(drop=True), dkpts
+    # CRITICAL: projections are ranked for display and portfolio optimization.
+    # Every simulation-matrix column MUST follow the same driver permutation.
+    # Previously the sorted projection table was paired with the original matrix,
+    # causing the optimizer to score drivers using unrelated drivers' race draws.
+    order = np.argsort(-out["proj_dk"].to_numpy(dtype=float), kind="stable")
+    ranked = out.iloc[order].reset_index(drop=True)
+    aligned_draws = dkpts[:, order]
+    if (not np.allclose(aligned_draws.mean(axis=0), ranked["proj_dk"].to_numpy(dtype=float), atol=0.02)
+            or not np.allclose(np.quantile(aligned_draws, 0.90, axis=0),
+                               ranked["ceiling_p90"].to_numpy(dtype=float), atol=0.02)):
+        raise ValueError("NASCAR player-to-simulation alignment check failed")
+    return ranked, aligned_draws
 
 def optimize_lineups(proj, n_lineups=10, salary_cap=50000, roster_size=6, max_overlap=4, objective="ceiling", max_exposure=1.0):
     try:
