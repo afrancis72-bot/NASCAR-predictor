@@ -144,8 +144,36 @@ def parse_profile_text(html):
     out["late_race_performance"]=metric_after_label("Late-Race Performance")
     return out
 
+
+def comparable_track_family(selected_track):
+    """Select NASCAR Reference's appropriate track category for every catalog venue.
+
+    These are broad track *families*, not an exact venue/course-specific model.
+    Never silently treat a road course or short track as an intermediate oval.
+    """
+    track = str(selected_track).casefold()
+    if any(s in track for s in ("daytona", "talladega", "atlanta")):
+        return "superspeedway"
+    if any(s in track for s in ("circuit of the americas", "chicago street",
+                                "sonoma", "watkins glen", "roval", "road course")):
+        return "road_course"
+    if any(s in track for s in ("martinsville", "bristol", "richmond",
+                                "iowa", "new hampshire", "phoenix", "dover")):
+        return "short_track"
+    if any(s in track for s in ("charlotte motor", "darlington", "homestead",
+                                "indianapolis", "kansas", "las vegas",
+                                "michigan", "nashville", "pocono", "texas")):
+        return "intermediate"
+    raise ValueError(f"Unrecognized track type for NASCAR Reference comparison: {selected_track}")
+
 def build_reference_dna(dk, selected_track):
-    atl="Atlanta" in selected_track
+    category = comparable_track_family(selected_track)
+    field_by_category = {
+        "superspeedway": "superspeedway_avg_finish",
+        "short_track": "short_track_avg_finish",
+        "road_course": "road_course_avg_finish",
+        "intermediate": "intermediate_avg_finish",
+    }
     rows=[]
     for name in dk["Name"].astype(str):
         row={"Name":name}
@@ -153,7 +181,8 @@ def build_reference_dna(dk, selected_track):
             html=driver_page(name)
             q=parse_profile_text(html)
             row.update(q)
-            row["comparable_track_avg_finish"]=q["superspeedway_avg_finish"] if atl else q["intermediate_avg_finish"]
+            row["comparable_track_avg_finish"] = q[field_by_category[category]]
+            row["comparison_family"] = category
             row["reference_ok"]=True
         except Exception:
             row.update({"recent_races":0,"recent_avg_finish":np.nan,"recent_avg_start":np.nan,
@@ -161,6 +190,9 @@ def build_reference_dna(dk, selected_track):
                         "comparable_track_avg_finish":np.nan,"superspeedway_elo":np.nan,"reference_ok":False})
         rows.append(row)
     x=pd.DataFrame(rows)
+    x["comparison_family"] = category
+    x["comparable_track_data_found"] = pd.to_numeric(
+        x.get("comparable_track_avg_finish"), errors="coerce").notna()
 
     # Current form: blend recent-10 (or last-5 fallback) and season finish.
     x["recent_finish_score"]=_pct_score(x["recent_avg_finish"],invert=True)
@@ -168,7 +200,7 @@ def build_reference_dna(dk, selected_track):
     x["recent_form_score"]=x[["recent_finish_score","season_finish_score"]].mean(axis=1,skipna=True)
     x["place_diff_score"]=_pct_score(x["recent_place_diff"])
     x["comparable_track_score"]=_pct_score(x["comparable_track_avg_finish"],invert=True)
-    x["track_type_elo_score"]=_pct_score(x["superspeedway_elo"]) if atl else np.nan
+    x["track_type_elo_score"]=_pct_score(x["superspeedway_elo"]) if category == "superspeedway" else np.nan
 
     # Prefer NASCAR Reference's own Reliability metric when present.
     # Fall back to finish consistency rather than inventing a value.
