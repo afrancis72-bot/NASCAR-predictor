@@ -287,6 +287,16 @@ for _c in _ref_present:
     _sd=_v.std(skipna=True)
     _ref_spread[_c]=0.0 if pd.isna(_sd) else float(_sd)
 _reference_integration_ok=bool(_ref_present) and any(v>1e-8 for v in _ref_spread.values())
+# Relevance gate: a strong generic driver ranking is NOT evidence of a valid
+# Martinsville/road-course/superspeedway forecast. Require actual matching
+# track-family history for a meaningful share of this week's field.
+_comparable_values = (pd.to_numeric(reference_dna["comparable_track_avg_finish"], errors="coerce")
+                      if "comparable_track_avg_finish" in reference_dna.columns
+                      else pd.Series(dtype=float))
+_comparable_count = int(_comparable_values.notna().sum())
+_min_comparable_count = max(6, int(np.ceil(len(dk)*0.20)))
+_reference_track_ready = _comparable_count >= _min_comparable_count
+_ready_for_race_export = _reference_integration_ok and _reference_track_ready
 # V2.8: Reference DNA is authoritative for coverage/confidence.
 if {"data_coverage_pct","model_confidence"}.issubset(reference_dna.columns):
     _cov=reference_dna[["Name","data_coverage_pct","model_confidence"]].copy()
@@ -437,9 +447,18 @@ with dfs_tab:
     st.subheader("DraftKings portfolio builder")
     if grid_ready: st.success("FINAL-GRID MODE — "+grid_message)
     else: st.error("PRE-QUALIFYING MODE — "+grid_message)
-    if objective=="ceiling" and not grid_ready:
+    st.caption(
+        f"Matching track-family statistics: {_comparable_count}/{len(dk)} drivers "
+        f"(minimum {_min_comparable_count} for final exports).")
+    if not grid_ready:
         lineups=pd.DataFrame()
-        st.warning("Final GPP portfolio remains locked until the official starting grid is complete.")
+        st.warning("All contest lineup exports remain locked until the complete starting grid is verified.")
+    elif not _ready_for_race_export:
+        lineups=pd.DataFrame()
+        st.error(
+            "LINEUP EXPORT BLOCKED: NASCAR Reference inputs are incomplete or do not "
+            "contain enough matching track-family history. "
+            "Do not substitute DraftKings salary/FPPG for track-specific evidence.")
     elif objective=="ceiling":
         lineups=optimize_scenario_portfolio(proj,sim_matrix,n_lineups=int(n_lineups),
             salary_cap=int(salary_cap),roster_size=6,max_overlap=int(max_overlap),
