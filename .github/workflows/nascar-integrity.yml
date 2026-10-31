@@ -1,0 +1,29 @@
+name: NASCAR model integrity
+on:
+  push:
+    branches: [main]
+    paths:
+      - "nascar_predictor_pro.py"
+      - "nascar_reference_dna.py"
+      - "app.py"
+      - "nascar_engine/**"
+      - "tests/test_nascar_integrity.py"
+      - ".github/workflows/nascar-integrity.yml"
+  pull_request:
+    paths:
+      - "nascar_predictor_pro.py"
+      - "nascar_reference_dna.py"
+      - "app.py"
+      - "nascar_engine/**"
+      - "tests/test_nascar_integrity.py"
+      - ".github/workflows/nascar-integrity.yml"
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install "numpy>=1.26" "pandas>=2.0" "scipy>=1.11" "beautifulsoup4>=4.12" "lxml>=5.0"
+      - run: python -m unittest discover -s tests -p 'test_nascar_integrity.py' -v
